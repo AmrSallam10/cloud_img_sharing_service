@@ -2,7 +2,7 @@
 extern crate serde;
 extern crate serde_json;
 extern crate serde_derive;
-use std::net::{UdpSocket, SocketAddr};
+use std::net::SocketAddr;
 use std::{fs, env, thread};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 // use serde_json::Result;
 // use serde_derive::Serialize;
+use tokio::sync::Mutex;
+use tokio::net::UdpSocket;
 
 
 // struct to hold server states (modify as needed)
@@ -130,14 +132,15 @@ fn broadcast_coordinator() {
 
 }
 
-fn handle_client(src_addr: std::net::SocketAddr, servers: &Vec<String>, socket: &UdpSocket, msg: MSG, stats: &mut ServerStats){
+async fn handle_client(src_addr: std::net::SocketAddr, servers: &Vec<String>, socket: &UdpSocket, msg: MSG, stats: &mut ServerStats){
     let addr = socket.local_addr().unwrap().to_string();
     println!("Received request from {}: {}", src_addr, msg.payload.unwrap());
     let response = "Hello! This is SERVER ".to_string() + &addr;
-    socket.send_to(response.as_bytes(), src_addr).expect("Failed to send response");
+    socket.send_to(response.as_bytes(), src_addr).await.unwrap();
 }
 
-fn handle_request(buffer: &[u8], src_addr: std::net::SocketAddr, servers: &Vec<String>, socket: &UdpSocket, stats: &mut ServerStats) {
+async fn handle_request(buffer: &[u8], src_addr: std::net::SocketAddr, servers: &Vec<String>, 
+        socket: Arc<&UdpSocket>, stats: &mut Arc<tokio::sync::Mutex<ServerStats>>) {
     // Parse the message to know hpw to handle it
     let request: &str = std::str::from_utf8(buffer).expect("Failed to convert to UTF-8");
     let msg: MSG = serde_json::from_str(request).unwrap();
@@ -183,8 +186,9 @@ fn initialize(filepath: &str, ip: SocketAddr) -> Vec::<String> {
     servers
 }
 
-fn main() {
-    let mut stats = ServerStats::new();
+#[tokio::main]
+async fn main() {
+    let stats = ServerStats::new();
     let args: Vec<_> = env::args().collect();
     
     let ip: SocketAddr = args[1].as_str().parse().unwrap();
@@ -194,25 +198,64 @@ fn main() {
     let servers = initialize(filepath, ip);  
     println!("{:?}", servers);  
 
-    let service_socket = UdpSocket::bind(ip).expect("Failed to bind to address");
+    let service_socket = UdpSocket::bind(ip).await.unwrap();
     println!("Server (service) listening on {ip}");
 
-    let election_socket = UdpSocket::bind(ip_elec).expect("Failed to bind to address");
+    let election_socket = UdpSocket::bind(ip_elec).await.unwrap();
     println!("Server (election) listening on {ip_elec}");
 
-    let mut buffer = [0; 1024];
+    let mut service_buffer = [0; 1024];
+    let mut election_buffer = [0; 1024];
+    let serv1 = servers.clone();
+    let serv2 = servers.clone();
+    let stats = Arc::new(Mutex::new(stats));
+    let mut stats1 = Arc::clone(&stats);
+    let mut stats2 = Arc::clone(&stats);
 
-    loop {
-        match service_socket.recv_from(&mut buffer) {
-            Ok((bytes_read, src_addr)) => {
-                let socket_clone = service_socket.try_clone().expect("couldn't clone the socket");
-                handle_request(&buffer[..bytes_read], src_addr, &servers, &socket_clone, &mut stats)
-            }
-            Err(e) => {
-                eprintln!("Error receiving data: {}", e);
+    tokio::spawn(async move {
+        loop{
+            match service_socket.recv_from(&mut service_buffer).await {
+                
+                Ok((bytes_read, src_addr)) => {
+                    let s = Arc::new(&service_socket);
+                    let r = s.clone();
+                    handle_request(&service_buffer[..bytes_read], src_addr, &serv1, r, &mut stats1).await;
+                }
+                Err(e) => {
+                    eprintln!("Error receiving data: {}", e);
+                }
             }
         }
-    }
+    }).await.unwrap();
+
+    tokio::spawn(async move {
+        loop{
+            match election_socket.recv_from(&mut election_buffer).await {
+                
+                Ok((bytes_read, src_addr)) => {
+                    let s = Arc::new(&election_socket);
+                    let r = s.clone();
+                    let serv = servers.clone();
+                    handle_request(&election_buffer[..bytes_read], src_addr, &serv2, r, &mut stats2).await;
+                }
+                Err(e) => {
+                    eprintln!("Error receiving data: {}", e);
+                }
+            }
+        }
+    }).await.unwrap();
+
+    // loop {
+    //     match service_socket.recv_from(&mut buffer) {
+    //         Ok((bytes_read, src_addr)) => {
+    //             let socket_clone = service_socket.try_clone().expect("couldn't clone the socket");
+    //             handle_request(&buffer[..bytes_read], src_addr, &servers, &socket_clone, &mut stats)
+    //         }
+    //         Err(e) => {
+    //             eprintln!("Error receiving data: {}", e);
+    //         }
+    //     }
+    // }
  
 }
 
