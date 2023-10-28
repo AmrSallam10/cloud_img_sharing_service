@@ -204,6 +204,7 @@ name = "project"
 version = "0.1.0"
 dependencies = [
  "rand",
+ "rand_chacha",
  "serde",
  "serde_derive",
  "serde_json",
