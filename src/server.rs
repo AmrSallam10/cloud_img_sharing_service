@@ -94,9 +94,9 @@ async fn handle_election(
             let mut rng = rand::thread_rng();
             rng.gen_range(1..1000) as u32
         });
-    println!("Own priority {} for {}", own_priority, req_id);
+    println!("[{}] Own priority {}", req_id, own_priority);
     if *own_priority > p {
-        println!("Own priority is higher");
+        println!("[{}] Own priority is higher", req_id);
         drop(data);
         send_ok_msg(
             req_id.clone(),
@@ -118,7 +118,7 @@ async fn handle_election(
 
 async fn reply_to_client(socket: Arc<UdpSocket>, req_id: String, stats: Arc<Mutex<ServerStats>>) {
     let data = stats.lock().await;
-    println!("Replying to Client");
+    println!("[{}] Replying to Client", req_id);
     let addr = &socket.local_addr().unwrap().to_string();
     let response = format!("Hello! This is SERVER {} for req_id {}\n", addr, req_id);
     let target_addr = data.requests_buffer.get(&req_id).unwrap().sender;
@@ -129,7 +129,7 @@ async fn reply_to_client(socket: Arc<UdpSocket>, req_id: String, stats: Arc<Mute
 }
 
 async fn handle_coordinator(stats: Arc<Mutex<ServerStats>>, req_id: String) {
-    println!("Flushing related stats");
+    println!("[{}] Flushing related stats", req_id);
     let mut data = stats.lock().await;
     if data.running_elections.remove(&req_id).is_some() {
         // Entry was removed (if it existed)
@@ -150,7 +150,7 @@ async fn broadcast_coordinator(
     peer_servers: Vec<(SocketAddr, SocketAddr)>,
     req_id: String,
 ) {
-    println!("broadcasting as a coordinator");
+    println!("[{}] broadcasting as a coordinator", req_id);
     for server in &peer_servers {
         let msg = Msg {
             sender: socket.local_addr().unwrap(),
@@ -176,7 +176,7 @@ async fn send_election_msg(
     let mut data = stats.lock().await;
     if !init_f || !data.running_elections.contains_key(&req_id) {
         let sender = election_socket.local_addr().unwrap();
-        println!("Sending Election msgs!");
+        println!("[{}] Sending Election msgs!", req_id);
 
         let peer_servers = data.get_peer_servers();
 
@@ -187,7 +187,7 @@ async fn send_election_msg(
                 let mut rng = rand::thread_rng();
                 rng.gen_range(1..1000) as u32
             });
-        println!("My own Priority {} for request {}", own_priority, req_id);
+        println!("[{}] My own Priority {}", req_id, own_priority);
 
         for server in &peer_servers {
             let msg = Msg {
@@ -203,13 +203,13 @@ async fn send_election_msg(
                 .unwrap();
         }
         drop(data);
-        println!("Waiting for ok msg");
+        println!("[{}] Waiting for ok msg", req_id);
         sleep(Duration::from_millis(1000)).await;
 
         let data = stats.lock().await;
 
         if !data.elections_received_oks.contains(&req_id) {
-            println!("Did not find ok msgs");
+            println!("[{}] Did not find ok msgs", req_id);
             drop(data);
             let own_ip = election_socket.local_addr().unwrap().to_string();
             broadcast_coordinator(
@@ -243,7 +243,7 @@ async fn handle_client(
     if data.running_elections.contains_key(&req_id) {
         println!("Election for this request is initialized, Buffering request!");
     } else {
-        println!("Buffering {req_id}");
+        println!("[{}] Buffering", req_id);
         let random = {
             let mut rng = rand::thread_rng();
             rng.gen_range(10..30)
