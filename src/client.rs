@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, UdpSocket};
 use std::process::Command;
 use std::str::FromStr;
-use std::{env, fs, thread, time::Duration};
+use std::{env, fs, thread, time::{Duration, Instant}};
 
 #[derive(Serialize, Deserialize)]
 enum Type {
@@ -59,26 +59,34 @@ fn main() -> std::io::Result<()> {
     let servers_filepath = "./servers.txt";
     let req_id_log_filepath = "./req_id_log.txt";
     let servers = get_servers(servers_filepath);
-    let mut req_id_log = get_req_id_log(req_id_log_filepath);
-
     let socket = UdpSocket::bind(ip)?;
-    for server in servers {
-        let server = SocketAddr::from_str(server.as_str()).unwrap();
-        let msg = Msg {
-            sender: socket.local_addr().unwrap(),
-            receiver: server,
-            msg_type: Type::ClientRequest(req_id_log + 1),
-            payload: Some("Hello! This is CLIENT1".to_string()),
-        };
-        let serialized_msg = serde_json::to_string(&msg).unwrap();
-        socket.send_to(serialized_msg.as_bytes(), server)?;
+    let mut time:u128 = 0;
+    let iterations = 1000;
+    for i in 0..iterations {
+        // let mut req_id_log = get_req_id_log(req_id_log_filepath);
+        let start = Instant::now();
+        for server in &servers {
+            let server = SocketAddr::from_str(server.as_str()).unwrap();
+            let msg = Msg {
+                sender: socket.local_addr().unwrap(),
+                receiver: server,
+                msg_type: Type::ClientRequest(i + 1),
+                payload: Some("Hello! This is CLIENT1".to_string()),
+            };
+            let serialized_msg = serde_json::to_string(&msg).unwrap();
+            socket.send_to(serialized_msg.as_bytes(), server)?;
+        }
+        let mut buffer = [0; 1024];
+        let (bytes_read, _source) = socket.recv_from(&mut buffer)?;
+        let duration = start.elapsed().as_millis();
+        time += duration;
+        let response = std::str::from_utf8(&buffer[..bytes_read]).unwrap();
+        println!("Server response: {}", response);
+        // req_id_log += 1;
+        // fs::write(req_id_log_filepath, req_id_log.to_string())?;
+        println!("received req {} in duration {}", i, duration);
     }
-    let mut buffer = [0; 1024];
-    let (bytes_read, _source) = socket.recv_from(&mut buffer)?;
-    let response = std::str::from_utf8(&buffer[..bytes_read]).unwrap();
-    println!("Server response: {}", response);
-    req_id_log += 1;
-    fs::write(req_id_log_filepath, req_id_log.to_string())?;
+    println!("Avg response time = {}", time as f64/iterations as f64);
 
     Ok(())
 }
