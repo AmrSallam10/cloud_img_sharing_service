@@ -29,7 +29,6 @@ use std::collections::HashSet;
 struct ServerStats {
     elections_initiated_by_me: HashSet<String>, // req_id -> (own_p, #anticipated Oks)
     elections_received_oks: HashSet<String>,    // req_id -> #currently received Oks
-    elections_leader: HashMap<String, (String, u32)>, // req_id -> (addr of currently chosen leader, its priority)
     running_elections: HashMap<String, u32>,
     requests_buffer: HashMap<String, Msg>,
     peer_servers: Vec<(SocketAddr, SocketAddr)>,
@@ -95,7 +94,7 @@ async fn handle_election(
             rng.gen_range(1..1000) as u32
         });
     println!("[{}] Own priority {}", req_id, own_priority);
-    if *own_priority > p {
+    if *own_priority > p && !data.elections_initiated_by_me.contains(&req_id){
         println!("[{}] Own priority is higher", req_id);
         drop(data);
         send_ok_msg(
@@ -139,6 +138,10 @@ async fn handle_coordinator(stats: Arc<Mutex<ServerStats>>, req_id: String) {
         // Entry was removed (if it existed)
     }
 
+    if data.elections_initiated_by_me.remove(&req_id) {
+        // Entry was removed (if it existed)
+    }
+
     if data.requests_buffer.remove(&req_id).is_some() {
         // Entry was removed (if it existed)
     }
@@ -176,7 +179,7 @@ async fn send_election_msg(
     let mut data = stats.lock().await;
     if !init_f || !data.running_elections.contains_key(&req_id) {
         let sender = election_socket.local_addr().unwrap();
-        println!("[{}] Sending Election msgs!", req_id);
+        println!("[{}] Sending Election msgs! - {}", req_id, init_f);
 
         let peer_servers = data.get_peer_servers();
 
@@ -187,7 +190,7 @@ async fn send_election_msg(
                 let mut rng = rand::thread_rng();
                 rng.gen_range(1..1000) as u32
             });
-        println!("[{}] My own Priority {}", req_id, own_priority);
+        println!("[{}] My own Priority {} - {}", req_id, own_priority, init_f);
 
         for server in &peer_servers {
             let msg = Msg {
@@ -202,14 +205,17 @@ async fn send_election_msg(
                 .await
                 .unwrap();
         }
+        if !data.elections_initiated_by_me.contains(&req_id){
+            data.elections_initiated_by_me.insert(req_id.clone());
+        }
         drop(data);
-        println!("[{}] Waiting for ok msg", req_id);
+        println!("[{}] Waiting for ok msg - {}", req_id, init_f);
         sleep(Duration::from_millis(1000)).await;
 
         let data = stats.lock().await;
 
         if !data.elections_received_oks.contains(&req_id) {
-            println!("[{}] Did not find ok msgs", req_id);
+            println!("[{}] Did not find ok msgs - {}", req_id, init_f);
             drop(data);
             let own_ip = election_socket.local_addr().unwrap().to_string();
             broadcast_coordinator(
@@ -414,7 +420,6 @@ impl ServerStats {
         ServerStats {
             requests_buffer: HashMap::new(),
             elections_initiated_by_me: HashSet::new(),
-            elections_leader: HashMap::new(),
             elections_received_oks: HashSet::new(),
             running_elections: HashMap::new(),
             peer_servers: Vec::new(),
