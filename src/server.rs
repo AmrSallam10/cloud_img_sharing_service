@@ -8,7 +8,6 @@
 
 extern crate serde;
 extern crate serde_derive;
-extern crate serde_json;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
@@ -70,9 +69,9 @@ async fn send_ok_msg(
         msg_type: Type::OKMsg(own_priority),
         payload: Some(req_id.clone()),
     };
-    let serialized_msg = serde_json::to_string(&msg).unwrap();
+    let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
     socket
-        .send_to(serialized_msg.as_bytes(), src_addr)
+        .send_to(&serialized_msg, src_addr)
         .await
         .unwrap();
 }
@@ -161,9 +160,9 @@ async fn broadcast_coordinator(
             msg_type: Type::CoordinatorBrdCast(leader.clone()),
             payload: Some(req_id.clone()),
         };
-        let serialized_msg = serde_json::to_string(&msg).unwrap();
+        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
         socket
-            .send_to(serialized_msg.as_bytes(), server.1)
+            .send_to(&serialized_msg, server.1)
             .await
             .unwrap();
     }
@@ -199,9 +198,9 @@ async fn send_election_msg(
                 msg_type: Type::ElectionRequest(*own_priority),
                 payload: Some(req_id.clone()),
             };
-            let serialized_msg = serde_json::to_string(&msg).unwrap();
+            let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
             election_socket
-                .send_to(serialized_msg.as_bytes(), server.1)
+                .send_to(&serialized_msg, server.1)
                 .await
                 .unwrap();
         }
@@ -270,12 +269,11 @@ async fn handle_request(
     election_socket: Arc<UdpSocket>,
     stats: &Arc<Mutex<ServerStats>>,
 ) {
-    let request: &str = std::str::from_utf8(buffer).expect("Failed to convert to UTF-8");
-    let msg: Msg = match serde_json::from_str(request) {
+    let msg: Msg = match serde_cbor::de::from_slice(&buffer[..]) {
         Ok(msg) => msg,
         Err(_) => return,
     };
-    println!("Received message :\n{}", request);
+    println!("Received message :\n{:?}", msg);
 
     match msg.msg_type {
         Type::ClientRequest(req_id) => {

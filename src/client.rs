@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 extern crate serde;
 extern crate serde_derive;
-extern crate serde_json;
+
 use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, UdpSocket};
 use std::process::Command;
@@ -73,8 +73,8 @@ fn main() -> std::io::Result<()> {
                 msg_type: Type::ClientRequest(i + 1),
                 payload: Some("Hello! This is CLIENT1".to_string()),
             };
-            let serialized_msg = serde_json::to_string(&msg).unwrap();
-            socket.send_to(serialized_msg.as_bytes(), server)?;
+            let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+            socket.send_to(&serialized_msg, server)?;
         }
         let mut buffer = [0; 1024];
         let (bytes_read, _source) = socket.recv_from(&mut buffer)?;
