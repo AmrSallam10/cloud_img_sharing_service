@@ -15,6 +15,12 @@ use tokio::{sync::Mutex, net::UdpSocket};
 use std::collections::HashSet;
 use std::collections::HashMap;
 
+
+#[derive(Clone)]
+struct ServerDirectory {
+    online_clients: HashSet<SocketAddr>,
+    clients_per_server: HashMap<SocketAddr, HashSet<SocketAddr>>,
+}
 // struct to hold server states (modify as needed)
 #[derive(Clone)]
 struct ServerStats {
@@ -25,6 +31,7 @@ struct ServerStats {
     requests_buffer: HashMap<String, MSG>,
     peer_servers: Vec<(SocketAddr, SocketAddr)>,
     sockets_ips: (String, String),
+    directory: ServerDirectory,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -278,6 +285,12 @@ async fn handle_request(buffer: &[u8], src_addr: std::net::SocketAddr,
     //
     match msg.msg_type {
         Type::ClientRequest(n)=> {
+            {
+                let mut data = stats.lock().await;
+                if !data.directory.client_exists(&src_addr) {
+                    data.directory.register_client(src_addr);
+                }
+            }
             // run election if not initiated (check stat) for the unique (IP + ID) of the request
             // if in election state and received same request (IP + ID), don't call for election
             // Update stats and Buffer client request
@@ -292,7 +305,7 @@ async fn handle_request(buffer: &[u8], src_addr: std::net::SocketAddr,
             handle_election(p, req_id, src_addr, socket, stats_clone).await;
             // if I'm an election initializer of the same request, send ok msg only if sender is of higher priority
             // if not an initializer, send back an ok msg with your priority
-            // 
+            //
         },
         Type::CoordinatorBrdCast(coordinator_ip) => {
             println!("Handlign Broadcast!");
@@ -310,7 +323,12 @@ async fn handle_request(buffer: &[u8], src_addr: std::net::SocketAddr,
             let req_id = msg.payload.clone().unwrap();
             handle_ok_msg(req_id, src_addr, p, socket, stats_clone).await;
             // update stats (received ok msgs)
-            // if i am an initializer and I have all Oks, I send coordinator msg and I handle the client request  
+            // if i am an initializer and I have all Oks, I send coordinator msg and I handle the client request
+            {
+                let mut data = stats.lock().await;
+                data.directory.display_online_clients();
+            }
+
         }
     }
 }
@@ -388,6 +406,42 @@ async fn main() {
     h2.await.unwrap();
 }
 
+impl ServerDirectory {
+    fn new() -> Self {
+        ServerDirectory {
+            online_clients: HashSet::new(),
+            clients_per_server: HashMap::new(),
+        }
+    }
+    fn register_client(&mut self, client_addr: SocketAddr) {
+        self.online_clients.insert(client_addr);
+
+    }
+
+    fn unregister_client(&mut self, client_addr: &SocketAddr) {
+        self.online_clients.remove(client_addr);
+    }
+
+    fn get_online_clients(&self) -> HashSet<SocketAddr> {
+        self.online_clients.clone()
+    }
+
+
+    fn get_clients_for_server(&self, server_addr: &SocketAddr) -> Option<HashSet<SocketAddr>> {
+        self.clients_per_server.get(server_addr).cloned()
+    }
+
+    fn client_exists(&self, client_addr: &SocketAddr) -> bool {
+        self.online_clients.contains(client_addr)
+    }
+
+    fn display_online_clients(&self) {
+        println!("Online Clients:");
+        for client_addr in &self.online_clients {
+            println!("{}", client_addr);
+        }
+    }
+}
 impl ServerStats {
     fn new() -> ServerStats {
         ServerStats {
@@ -397,7 +451,8 @@ impl ServerStats {
             elections_received_oks: HashMap::new(),
             running_elections: HashSet::new(), 
             peer_servers: Vec::new(),
-            sockets_ips: (String::new(), String::new())
+            sockets_ips: (String::new(), String::new()),
+            directory: ServerDirectory::new()
         }
     }
 
