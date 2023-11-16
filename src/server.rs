@@ -17,6 +17,7 @@ use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{env, fs};
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout, Duration};
 use tokio::{net::UdpSocket, sync::Mutex};
@@ -61,7 +62,7 @@ async fn send_ok_msg(
     socket: Arc<UdpSocket>,
     stats: Arc<Mutex<ServerStats>>,
 ) {
-    println!("sending ok msg");
+    println!("[{}] sending ok msg", req_id);
     let data = stats.lock().await;
     let own_priority = *data.running_elections.get(&req_id).unwrap();
     let msg = Msg {
@@ -92,9 +93,11 @@ async fn handle_election(
         .or_insert_with(|| {
             let mut rng = rand::thread_rng();
             rng.gen_range(1..1000) as u32
-        });
+        })
+        .to_owned();
     println!("[{}] Own priority {}", req_id, own_priority);
-    if *own_priority > p && !data.elections_initiated_by_me.contains(&req_id){
+
+    if own_priority > p {
         println!("[{}] Own priority is higher", req_id);
         drop(data);
         send_ok_msg(
@@ -104,27 +107,45 @@ async fn handle_election(
             stats.clone(),
         )
         .await;
-        send_election_msg(
-            service_socket.clone(),
-            election_socket.clone(),
-            stats.clone(),
-            req_id.clone(),
-            false,
-        )
-        .await;
+
+        if !stats
+            .lock()
+            .await
+            .elections_initiated_by_me
+            .contains(&req_id)
+        {
+            send_election_msg(
+                service_socket.clone(),
+                election_socket.clone(),
+                stats.clone(),
+                req_id.clone(),
+                false,
+            )
+            .await;
+        }
     }
 }
 
 async fn reply_to_client(socket: Arc<UdpSocket>, req_id: String, stats: Arc<Mutex<ServerStats>>) {
     let data = stats.lock().await;
-    println!("[{}] Replying to Client", req_id);
-    let addr = &socket.local_addr().unwrap().to_string();
-    let response = format!("Hello! This is SERVER {} for req_id {}\n", addr, req_id);
-    let target_addr = data.requests_buffer.get(&req_id).unwrap().sender;
-    socket
-        .send_to(response.as_bytes(), target_addr)
-        .await
-        .unwrap();
+    // let target_addr = data.requests_buffer.get(&req_id).unwrap().sender;
+    match data.requests_buffer.get(&req_id) {
+        Some(s) => {
+            let s = s.to_owned();
+            println!("[{}] Replying to Client", req_id);
+            let addr = &socket.local_addr().unwrap().to_string();
+            let target_addr = s.sender;
+            let num: u32 = s.payload.unwrap().parse().unwrap();
+            let response = format!("{}", num + 1);
+            socket
+                .send_to(response.as_bytes(), target_addr)
+                .await
+                .unwrap();
+        }
+        None => {
+            println!("[{}] Aborting replying to client", req_id);
+        }
+    };
 }
 
 async fn handle_coordinator(stats: Arc<Mutex<ServerStats>>, req_id: String) {
@@ -189,14 +210,20 @@ async fn send_election_msg(
             .or_insert_with(|| {
                 let mut rng = rand::thread_rng();
                 rng.gen_range(1..1000) as u32
-            });
+            })
+            .to_owned();
+
+        if !data.elections_initiated_by_me.contains(&req_id) {
+            data.elections_initiated_by_me.insert(req_id.clone());
+        }
+        drop(data);
         println!("[{}] My own Priority {} - {}", req_id, own_priority, init_f);
 
         for server in &peer_servers {
             let msg = Msg {
                 sender,
                 receiver: server.1,
-                msg_type: Type::ElectionRequest(*own_priority),
+                msg_type: Type::ElectionRequest(own_priority),
                 payload: Some(req_id.clone()),
             };
             let serialized_msg = serde_json::to_string(&msg).unwrap();
@@ -205,10 +232,6 @@ async fn send_election_msg(
                 .await
                 .unwrap();
         }
-        if !data.elections_initiated_by_me.contains(&req_id){
-            data.elections_initiated_by_me.insert(req_id.clone());
-        }
-        drop(data);
         println!("[{}] Waiting for ok msg - {}", req_id, init_f);
         sleep(Duration::from_millis(1000)).await;
 
@@ -240,15 +263,19 @@ async fn handle_client(
     src_addr: SocketAddr,
 ) {
     let req_id = format!("{}:{}", msg.sender, id);
-    println!("Handling Request {}", req_id);
+    println!("[{}] Handling client Request", req_id);
     let mut data = stats.lock().await;
     data.requests_buffer
         .entry(req_id.clone())
         .or_insert_with(|| msg.clone());
 
     if data.running_elections.contains_key(&req_id) {
-        println!("Election for this request is initialized, Buffering request!");
+        println!(
+            "[{}] Election for this request is initialized, Buffering request!",
+            req_id
+        );
     } else {
+        drop(data);
         println!("[{}] Buffering", req_id);
         let random = {
             let mut rng = rand::thread_rng();
@@ -256,6 +283,7 @@ async fn handle_client(
         } as u64;
         sleep(Duration::from_millis(random)).await;
 
+        let data = stats.lock().await;
         if !data.running_elections.contains_key(&req_id) {
             drop(data);
             send_election_msg(service_socket, election_socket, stats, req_id, true).await;
@@ -290,8 +318,8 @@ async fn handle_request(
             .await;
         }
         Type::ElectionRequest(priority) => {
-            println!("handling election!");
             let req_id = msg.payload.clone().unwrap();
+            println!("[{}] handling election!", req_id);
             handle_election(
                 priority,
                 req_id,
@@ -303,13 +331,13 @@ async fn handle_request(
             .await;
         }
         Type::CoordinatorBrdCast(coordinator_ip) => {
-            println!("Handlign Broadcast!");
             let req_id = msg.payload.clone().unwrap();
+            println!("[{}] Handlign Broadcast!", req_id);
             handle_coordinator(stats.to_owned(), req_id).await;
         }
         Type::OKMsg(priority) => {
-            println!("Handling OK");
             let req_id = msg.payload.clone().unwrap();
+            println!("[{}] Handling OK", req_id);
             handle_ok_msg(req_id, stats.to_owned()).await;
         }
     }

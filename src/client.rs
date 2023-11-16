@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, UdpSocket};
 use std::process::Command;
 use std::str::FromStr;
-use std::{env, fs, thread, time::{Duration, Instant}};
+use std::{
+    env, fs, thread,
+    time::{Duration, Instant},
+};
 
 #[derive(Serialize, Deserialize)]
 enum Type {
@@ -22,21 +25,6 @@ struct Msg {
     receiver: SocketAddr,
     msg_type: Type,
     payload: Option<String>,
-}
-
-fn is_reachable(ip: &str) -> bool {
-    let output = Command::new("nc")
-        .arg("-v")
-        .arg("-u")
-        .arg("-z")
-        .arg("-w")
-        .arg("1") // Send 1 ping packet
-        .arg(ip)
-        .output()
-        .expect("Failed to execute ping command");
-
-    // Check the exit status
-    output.status.success()
 }
 
 fn get_servers(filepath: &str) -> Vec<String> {
@@ -60,8 +48,9 @@ fn main() -> std::io::Result<()> {
     let req_id_log_filepath = "./req_id_log.txt";
     let servers = get_servers(servers_filepath);
     let socket = UdpSocket::bind(ip)?;
-    let mut time:u128 = 0;
-    let iterations = 1000;
+    let mut time: u128 = 0;
+    let iterations = 500;
+    // let mut vector: Vec<u32> = Vec::with_capacity(100);
     for i in 0..iterations {
         // let mut req_id_log = get_req_id_log(req_id_log_filepath);
         let start = Instant::now();
@@ -71,22 +60,27 @@ fn main() -> std::io::Result<()> {
                 sender: socket.local_addr().unwrap(),
                 receiver: server,
                 msg_type: Type::ClientRequest(i + 1),
-                payload: Some("Hello! This is CLIENT1".to_string()),
+                payload: Some(i.to_string()),
             };
             let serialized_msg = serde_json::to_string(&msg).unwrap();
             socket.send_to(serialized_msg.as_bytes(), server)?;
         }
         let mut buffer = [0; 1024];
         let (bytes_read, _source) = socket.recv_from(&mut buffer)?;
-        let duration = start.elapsed().as_millis();
+        let duration = start.elapsed().as_micros();
         time += duration;
-        let response = std::str::from_utf8(&buffer[..bytes_read]).unwrap();
-        println!("Server response: {}", response);
+        let response: u32 = std::str::from_utf8(&buffer[..bytes_read])
+            .unwrap()
+            .parse()
+            .unwrap();
+        // println!("received req {} in duration {}", i, duration);
+        println!("[{}] : {}", _source, response);
+        if response != i + 1 {
+            println!("Error!")
+        };
         // req_id_log += 1;
         // fs::write(req_id_log_filepath, req_id_log.to_string())?;
-        println!("received req {} in duration {}", i, duration);
     }
-    println!("Avg response time = {}", time as f64/iterations as f64);
-
+    println!("Avg response time = {}", time as f64 / iterations as f64);
     Ok(())
 }
