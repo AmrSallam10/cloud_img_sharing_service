@@ -12,6 +12,7 @@ extern crate serde_json;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::process::Command;
 use std::str::FromStr;
@@ -233,7 +234,20 @@ async fn send_election_msg(
                 .unwrap();
         }
         println!("[{}] Waiting for ok msg - {}", req_id, init_f);
-        sleep(Duration::from_millis(1000)).await;
+        let sleep = sleep(Duration::from_millis(500));
+        tokio::pin!(sleep);
+        // sleep(Duration::from_millis(1000)).await;
+
+        tokio::select! {
+            _ = &mut sleep => {
+                // Code to execute when sleep completes
+                println!("Sleep completed");
+            },
+            _ = check_for_oks(stats.clone(), req_id.clone()) => {
+                // Code to execute when check_for_oks completes
+                println!("check_for_oks completed");
+            }
+        }
 
         let data = stats.lock().await;
 
@@ -250,6 +264,15 @@ async fn send_election_msg(
             .await;
             reply_to_client(service_socket.clone(), req_id.clone(), stats.clone()).await;
             handle_coordinator(stats.clone(), req_id.clone()).await;
+        }
+    }
+}
+
+async fn check_for_oks(stats: Arc<Mutex<ServerStats>>, req_id: String){
+    loop{
+        match stats.lock().await.elections_received_oks.contains(&req_id) {
+            true => break,
+            false => continue
         }
     }
 }

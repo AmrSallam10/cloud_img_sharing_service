@@ -49,8 +49,7 @@ fn main() -> std::io::Result<()> {
     let servers = get_servers(servers_filepath);
     let socket = UdpSocket::bind(ip)?;
     let mut time: u128 = 0;
-    let iterations = 500;
-    // let mut vector: Vec<u32> = Vec::with_capacity(100);
+    let iterations = 200;
     for i in 0..iterations {
         // let mut req_id_log = get_req_id_log(req_id_log_filepath);
         let start = Instant::now();
