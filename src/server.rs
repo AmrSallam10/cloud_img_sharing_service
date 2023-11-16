@@ -11,13 +11,13 @@ extern crate serde_derive;
 extern crate serde_json;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{env, fs};
+use std::{env, fs as std_fs};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout, Duration};
@@ -25,6 +25,22 @@ use tokio::{net::UdpSocket, sync::Mutex};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use steganography::encoder::Encoder;
+use tokio::fs;
+
+mod fragment;
+use fragment::{BigMessage, Fragment};
+
+const BUFFER_SIZE: usize = 32768;
+const FRAG_SIZE: usize = 4096;
+const BLOCK_SIZE: usize = 2;
+const TIMEOUT_MILLIS: usize = 2000;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Image {
+    dims: (u32, u32),
+    data: Vec<u8>,
+}
 
 // struct to hold server states (modify as needed)
 #[derive(Clone)]
@@ -43,6 +59,7 @@ enum Type {
     ElectionRequest(u32),
     OKMsg(u32),
     CoordinatorBrdCast(String),
+    Ack(u32),
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Msg {
@@ -268,11 +285,11 @@ async fn send_election_msg(
     }
 }
 
-async fn check_for_oks(stats: Arc<Mutex<ServerStats>>, req_id: String){
-    loop{
+async fn check_for_oks(stats: Arc<Mutex<ServerStats>>, req_id: String) {
+    loop {
         match stats.lock().await.elections_received_oks.contains(&req_id) {
             true => break,
-            false => continue
+            false => continue,
         }
     }
 }
@@ -363,20 +380,94 @@ async fn handle_request(
             println!("[{}] Handling OK", req_id);
             handle_ok_msg(req_id, stats.to_owned()).await;
         }
+        _ => {}
     }
 }
 
 fn get_peer_servers(filepath: &str, own_ip: SocketAddr) -> Vec<(SocketAddr, SocketAddr)> {
     let mut servers = Vec::<(SocketAddr, SocketAddr)>::new();
-    let contents = fs::read_to_string(filepath).expect("Should have been able to read the file");
+    let contents =
+        std_fs::read_to_string(filepath).expect("Should have been able to read the file");
     for ip in contents.lines() {
         if ip != own_ip.to_string() {
-            let service_ip: SocketAddr = ip.parse().unwrap();
-            let election_ip = SocketAddr::new(service_ip.ip(), service_ip.port() + 1);
+            let election_ip: SocketAddr = ip.parse().unwrap();
+            let service_ip = SocketAddr::new(election_ip.ip(), election_ip.port() - 1);
             servers.push((service_ip, election_ip));
         }
     }
     servers
+}
+
+async fn handle_fragmenets(
+    socket: Arc<UdpSocket>,
+    frag: Fragment,
+    src_addr: std::net::SocketAddr,
+    map: &mut HashMap<String, BigMessage>,
+) -> Option<String> {
+    println!("Received fragment {}.", frag.frag_id);
+
+    let st_idx = FRAG_SIZE * (frag.frag_id as usize);
+    let end_idx = min(
+        FRAG_SIZE * (frag.frag_id + 1) as usize,
+        frag.msg_len as usize,
+    );
+
+    // if this is the first fragment create a new entry in the map
+    if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone()) {
+        let mut msg_data = vec![0; frag.msg_len as usize];
+
+        msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+        let mut received_frags = HashSet::new();
+        received_frags.insert(frag.frag_id);
+
+        let msg = BigMessage {
+            data: msg_data,
+            msg_len: frag.msg_len,
+            received_len: (end_idx - st_idx) as u32,
+            received_frags,
+        };
+
+        e.insert(msg);
+    } else {
+        // should not be needed since we know key exists
+        let _default_msg = BigMessage::default_msg();
+        let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
+
+        if !(big_msg.received_frags.contains(&frag.frag_id)) {
+            big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+            big_msg.received_len += (end_idx - st_idx) as u32;
+            big_msg.received_frags.insert(frag.frag_id);
+        }
+
+        if big_msg.received_len == big_msg.msg_len
+            || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+        {
+            // send ack
+            let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
+                / (FRAG_SIZE * BLOCK_SIZE)
+                - 1;
+            let ack = Msg {
+                msg_type: Type::Ack(block_id as u32),
+                sender: socket.local_addr().unwrap(),
+                receiver: src_addr,
+                payload: None,
+            };
+
+            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+            socket
+                .send_to(&ack, src_addr.to_string())
+                .await
+                .expect("Failed to send!");
+        }
+        if big_msg.received_len == big_msg.msg_len {
+            println!("Full message is received!");
+            let big_msg = big_msg.to_owned();
+            return Some(frag.msg_id);
+        }
+    }
+    None
 }
 
 #[tokio::main]
@@ -408,24 +499,41 @@ async fn main() {
     let mut service_buffer: [u8; 2048] = [0; 2048];
     let mut election_buffer: [u8; 2048] = [0; 2048];
 
+    let mut map: HashMap<String, BigMessage> = HashMap::new();
+
     let h1 = tokio::spawn({
         async move {
             loop {
                 match service_socket.recv_from(&mut service_buffer).await {
                     Ok((bytes_read, src_addr)) => {
+                        println!("{} bytes from {}.", bytes_read, src_addr);
+                        let frag: Fragment =
+                            serde_cbor::de::from_slice(&service_buffer[..bytes_read]).unwrap();
                         let service_socket = Arc::clone(&service_socket);
-                        let election_socket = Arc::clone(&election_socket2);
-                        let stats_clone = Arc::clone(&stats_service);
-                        tokio::spawn(async move {
-                            handle_request(
-                                &service_buffer[..bytes_read],
-                                src_addr,
-                                service_socket,
-                                election_socket,
-                                &stats_clone,
-                            )
+                        if let Some(req_id) =
+                            handle_fragmenets(service_socket.clone(), frag, src_addr, &mut map)
+                                .await
+                        {
+                            let data = map.get(&req_id).unwrap().data.to_owned();
+                            let _ = tokio::spawn(async move {
+                                let default_image = image::open("default_image.png").unwrap();
+                                let encoder = Encoder::new(&data, default_image);
+                                let encoded_image = encoder.encode_alpha();
+                                let image = Image {
+                                    dims: encoded_image.dimensions(),
+                                    data: encoded_image.into_raw(),
+                                };
+                                let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
+                                fragment::send(
+                                    encoded_bytes,
+                                    service_socket.clone(),
+                                    src_addr.to_string().as_str(),
+                                    &req_id,
+                                )
+                                .await;
+                            })
                             .await;
-                        });
+                        }
                     }
                     Err(e) => {
                         eprintln!("Error receiving data: {}", e);
