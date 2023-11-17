@@ -479,6 +479,7 @@ async fn main() {
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
     let mut channels_map: HashMap<String, mpsc::Sender<u32>> = HashMap::new();
+    let mut join_handles = vec![];
 
     let h1 = tokio::spawn({
         async move {
@@ -505,7 +506,7 @@ async fn main() {
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
 
-                                    let h = tokio::spawn(async move {
+                                    join_handles.push(tokio::spawn(async move {
                                         let default_image =
                                             image::open("default_image.png").unwrap();
                                         let encoder = Encoder::new(&data, default_image);
@@ -524,7 +525,7 @@ async fn main() {
                                             rx,
                                         )
                                         .await;
-                                    });
+                                    }));
                                 }
                             }
                             Type::Ack(msg_id, block_id) => {
@@ -539,6 +540,9 @@ async fn main() {
 
                             _ => {}
                         }
+                        for join_handle in join_handles.drain(..) {
+                            join_handle.await.unwrap();
+                        }
                     }
                     Err(e) => {
                         eprintln!("Error receiving data: {}", e);
@@ -546,6 +550,7 @@ async fn main() {
                 }
             }
         }
+        
     });
 
     let h2 = tokio::spawn({
