@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use std::{env, fs as std_fs};
 use tokio::select;
 use tokio::sync::mpsc;
@@ -59,7 +60,8 @@ enum Type {
     ElectionRequest(u32),
     OKMsg(u32),
     CoordinatorBrdCast(String),
-    Ack(u32),
+    Ack(String, u32),
+    Fragment(Fragment),
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Msg {
@@ -449,7 +451,7 @@ async fn handle_fragmenets(
                 / (FRAG_SIZE * BLOCK_SIZE)
                 - 1;
             let ack = Msg {
-                msg_type: Type::Ack(block_id as u32),
+                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
                 sender: socket.local_addr().unwrap(),
                 receiver: src_addr,
                 payload: None,
@@ -500,6 +502,7 @@ async fn main() {
     let mut election_buffer: [u8; 2048] = [0; 2048];
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
+    let mut channels_map: HashMap<String, (mpsc::Sender<u32>, mpsc::Receiver<u32>)> = HashMap::new();
 
     let h1 = tokio::spawn({
         async move {
@@ -507,33 +510,53 @@ async fn main() {
                 match service_socket.recv_from(&mut service_buffer).await {
                     Ok((bytes_read, src_addr)) => {
                         println!("{} bytes from {}.", bytes_read, src_addr);
-                        let frag: Fragment =
-                            serde_cbor::de::from_slice(&service_buffer[..bytes_read]).unwrap();
-                        let service_socket = Arc::clone(&service_socket);
-                        if let Some(req_id) =
-                            handle_fragmenets(service_socket.clone(), frag, src_addr, &mut map)
-                                .await
-                        {
-                            let data = map.get(&req_id).unwrap().data.to_owned();
-                            let _ = tokio::spawn(async move {
-                                let default_image = image::open("default_image.png").unwrap();
-                                let encoder = Encoder::new(&data, default_image);
-                                let encoded_image = encoder.encode_alpha();
-                                let image = Image {
-                                    dims: encoded_image.dimensions(),
-                                    data: encoded_image.into_raw(),
-                                };
-                                let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
-                                fragment::send(
-                                    encoded_bytes,
-                                    service_socket.clone(),
-                                    src_addr.to_string().as_str(),
-                                    &req_id,
-                                )
-                                .await;
-                            })
-                            .await;
+                        
+                        let msg: Msg = serde_cbor::de::from_slice(&service_buffer[..bytes_read]).unwrap();
+
+                        match msg.msg_type {
+                            Type::Fragment(frag) => {
+                                let service_socket = Arc::clone(&service_socket);
+                                if let Some(req_id) =
+                                    handle_fragmenets(service_socket.clone(), frag, src_addr, &mut map)
+                                        .await
+                                        {
+                                            let data = map.get(&req_id).unwrap().data.to_owned();
+                                            let (tx, mut rx) = mpsc::channel(100);
+                                            channels_map.insert(req_id.clone(), (tx, rx));
+                                           
+                                            let _ = tokio::spawn(async move {
+                                                let default_image = image::open("default_image.png").unwrap();
+                                                let encoder = Encoder::new(&data, default_image);
+                                                let encoded_image = encoder.encode_alpha();
+                                                let image = Image {
+                                                    dims: encoded_image.dimensions(),
+                                                    data: encoded_image.into_raw(),
+                                                };
+                                                
+                                                
+                                                let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
+                                                fragment::send(
+                                                    encoded_bytes,
+                                                    service_socket.clone(),
+                                                    src_addr.to_string().as_str(),
+                                                    &req_id,
+                                                    channels_map.get(&req_id).unwrap().0
+
+                                                )
+                                                .await;
+                                            })
+                                            .await;
+                                        }
+                              
+                            }
+                            Type::Ack(msg_id, block_id) => {
+                                channels_map.get(&msg_id).unwrap().0.send(block_id).await.unwrap()
+                            }
+                           
+                            _ => {}
                         }
+                    
+                    
                     }
                     Err(e) => {
                         eprintln!("Error receiving data: {}", e);
