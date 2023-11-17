@@ -3,42 +3,16 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 use image::Rgba;
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{
-    env, fs as std_fs, thread,
-    time::{Duration, Instant},
-};
+use std::{env, fs as std_fs};
 use steganography::decoder::Decoder;
 use tokio::fs;
 use tokio::net::UdpSocket;
 
 mod fragment;
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Image {
-    dims: (u32, u32),
-    data: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-enum Type {
-    ClientRequest(u32),
-    ElectionRequest(u32),
-    OKMsg(u32),
-    CoordinatorBrdCast(String),
-}
-
-#[derive(Serialize, Deserialize)]
-struct Msg {
-    sender: SocketAddr,
-    receiver: SocketAddr,
-    msg_type: Type,
-    payload: Option<String>,
-}
+use fragment::{Image, Msg, Type};
 
 fn get_servers(filepath: &str) -> Vec<String> {
     let contents =
@@ -66,6 +40,7 @@ async fn main() {
     let socket = UdpSocket::bind(ip).await.unwrap();
     let mut buffer = [0; 1024];
     let mut chosen_server = String::new();
+
     // trigger election
     for server in &servers {
         let server = SocketAddr::from_str(server.as_str()).unwrap();
@@ -75,14 +50,12 @@ async fn main() {
             msg_type: Type::ClientRequest(id),
             payload: None,
         };
-        let serialized_msg = serde_json::to_string(&msg).unwrap();
-        socket
-            .send_to(serialized_msg.as_bytes(), server)
-            .await
-            .unwrap();
+        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+        socket.send_to(&serialized_msg, server).await.unwrap();
     }
+
     match socket.recv_from(&mut buffer).await {
-        Ok((bytes_read, src_addr)) => {
+        Ok((_bytes_read, src_addr)) => {
             chosen_server = src_addr.to_string();
         }
         Err(e) => {
@@ -95,14 +68,9 @@ async fn main() {
     // send the img to be encrypted
     let contents = fs::read("pic.jpg").await.unwrap();
     let socket = Arc::new(socket);
+    let msg_id = format!("{}:{}", socket.local_addr().unwrap(), id);
     println!("Message Length {}", contents.len());
-    fragment::send(
-        contents,
-        socket.clone(),
-        &chosen_server,
-        id.to_string().as_str(),
-    )
-    .await;
+    fragment::client_send(contents, socket.clone(), &chosen_server, &msg_id).await;
     let data = fragment::recieve(socket.clone()).await;
     let image: Image = serde_cbor::de::from_slice(&data).unwrap();
     let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> =

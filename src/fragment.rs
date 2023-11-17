@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::net::UdpSocket;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use tokio::time::{self, Duration};
+use std::sync::Arc;
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::time::{self, Duration};
 
 const BUFFER_SIZE: usize = 32768;
 const FRAG_SIZE: usize = 4096;
@@ -21,17 +21,21 @@ pub struct Fragment {
     pub data: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-enum Type {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Type {
+    ClientRequest(u32),
+    ElectionRequest(u32),
+    OKMsg(u32),
+    CoordinatorBrdCast(String),
     Ack(String, u32),
     Fragment(Fragment),
 }
-#[derive(Serialize, Deserialize, Debug)]
-struct Msg {
-    sender: SocketAddr,
-    receiver: SocketAddr,
-    msg_type: Type,
-    payload: Option<String>,
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Msg {
+    pub sender: SocketAddr,
+    pub receiver: SocketAddr,
+    pub msg_type: Type,
+    pub payload: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,13 +57,87 @@ impl BigMessage {
     }
 }
 
-pub async fn send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, msg_id: &str, mut rx: mpsc::Receiver<u32>) {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Image {
+    pub dims: (u32, u32),
+    pub data: Vec<u8>,
+}
+
+pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, msg_id: &str) {
     let frag_num = (data.len() + FRAG_SIZE - 1) / FRAG_SIZE; // a shorthand for ceil()
     let block_num = (frag_num + BLOCK_SIZE - 1) / BLOCK_SIZE; // a shorthand for ceil()
     let msg_len = data.len();
-    // let msg_id = "1";
 
     let mut buffer = [0; BUFFER_SIZE];
+
+    let mut curr_block = 0;
+    while curr_block < block_num {
+        let frag_st = BLOCK_SIZE * curr_block;
+        let frag_end = min(BLOCK_SIZE * (curr_block + 1), frag_num);
+        // construct and send fragments of the current block
+        for frag_id in frag_st..frag_end {
+            let st_idx = FRAG_SIZE * frag_id;
+            let end_idx = min(FRAG_SIZE * (frag_id + 1), msg_len);
+
+            let data_size = end_idx - st_idx;
+
+            let mut frag_data = vec![0; data_size];
+
+            frag_data.copy_from_slice(&data[st_idx..end_idx]);
+
+            let frag = Fragment {
+                msg_id: String::from(msg_id),
+                frag_id: frag_id as u32,
+                msg_len: msg_len as u32,
+                data: frag_data,
+            };
+
+            println!("Sending fragment {} of size {}.", frag_id, data_size);
+
+            let frag = serde_cbor::ser::to_vec(&frag).unwrap();
+            socket
+                .send_to(&frag, address)
+                .await
+                .expect("Failed to send!");
+        }
+
+        let sleep = time::sleep(Duration::from_millis(TIMEOUT_MILLIS as u64));
+        tokio::pin!(sleep);
+
+        println!(
+            "Waiting for an ACK for block {}. Timeout {} milli seconds.",
+            curr_block, TIMEOUT_MILLIS
+        );
+
+        // wait for an ack
+        tokio::select! {
+            Ok((bytes_read, _)) = socket.recv_from(&mut buffer) => {
+                // wait for the ack
+
+                let msg: Msg = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
+                println!("{:?}", msg);
+
+                // TODO: Need logic to handle unexpected messages without breaking select!
+                //       Consider checking if conditions in the matching of branch conditions
+                curr_block += 1;
+            }
+            _ = &mut sleep => {
+                println!("timeout");
+            }
+        }
+    }
+}
+
+pub async fn server_send(
+    data: Vec<u8>,
+    socket: Arc<UdpSocket>,
+    address: &str,
+    msg_id: &str,
+    mut rx: mpsc::Receiver<u32>,
+) {
+    let frag_num = (data.len() + FRAG_SIZE - 1) / FRAG_SIZE; // a shorthand for ceil()
+    let block_num = (frag_num + BLOCK_SIZE - 1) / BLOCK_SIZE; // a shorthand for ceil()
+    let msg_len = data.len();
 
     let mut curr_block = 0;
     while curr_block < block_num {
@@ -90,7 +168,10 @@ pub async fn send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, msg_id: 
                 payload: None,
             };
 
-            println!("Sending message wrapping fragment {} of size {}.", frag_id, data_size);
+            println!(
+                "Sending message wrapping fragment {} of size {}.",
+                frag_id, data_size
+            );
 
             let msg = serde_cbor::ser::to_vec(&msg).unwrap();
             socket
@@ -106,7 +187,6 @@ pub async fn send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, msg_id: 
             "Waiting for an ACK for block {}. Timeout {} milli seconds.",
             curr_block, TIMEOUT_MILLIS
         );
-        
 
         // wait for an ack
         tokio::select! {
@@ -134,14 +214,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
             Ok((bytes_read, src_addr)) => {
                 println!("{} bytes from {}.", bytes_read, src_addr);
 
-                let msg: Msg = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
-                let frag = match msg.msg_type {
-                    Type::Fragment(frag) => frag,
-                    _ => {
-                        println!("Unexpected message type!");
-                        continue;
-                    }
-                };
+                let frag: Fragment = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
                 println!("Received fragment {}.", frag.frag_id);
 
                 let st_idx = FRAG_SIZE * (frag.frag_id as usize);
@@ -171,7 +244,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                 } else {
                     // should not be needed since we know key exists
                     let _default_msg = BigMessage::default_msg();
-                    let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
+                    let big_msg = map.entry(frag.msg_id).or_insert(_default_msg);
 
                     if !(big_msg.received_frags.contains(&frag.frag_id)) {
                         big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
@@ -188,9 +261,9 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                             / (FRAG_SIZE * BLOCK_SIZE)
                             - 1;
                         let ack = Msg {
+                            msg_type: Type::Ack(frag.frag_id.to_string(), block_id as u32),
                             sender: socket.local_addr().unwrap(),
                             receiver: src_addr,
-                            msg_type: Type::Ack(frag.msg_id, block_id as u32),
                             payload: None,
                         };
 
