@@ -132,8 +132,7 @@ async fn reply_to_client(socket: Arc<UdpSocket>, req_id: String, stats: Arc<Mute
             println!("[{}] Replying to Client", req_id);
             let addr = &socket.local_addr().unwrap().to_string();
             let target_addr = s.sender;
-            let num: u32 = s.payload.unwrap().parse().unwrap();
-            let response = format!("{}", num + 1);
+            let response = "chosen server";
             socket
                 .send_to(response.as_bytes(), target_addr)
                 .await
@@ -394,7 +393,7 @@ async fn handle_fragmenets(
     // if this is the first fragment create a new entry in the map
     if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone()) {
         let mut msg_data = vec![0; frag.msg_len as usize];
-
+        println!("{}", frag.msg_id);
         msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
 
         let mut received_frags = HashSet::new();
@@ -454,11 +453,11 @@ async fn main() {
     let mut stats = ServerStats::new();
     let args: Vec<_> = env::args().collect();
 
-    let ip_service: SocketAddr = args[1].as_str().parse().unwrap();
-    let ip_elec = SocketAddr::new(ip_service.ip(), ip_service.port() + 1);
+    let ip_elec: SocketAddr = args[1].as_str().parse().unwrap();
+    let ip_service = SocketAddr::new(ip_elec.ip(), ip_elec.port() - 1);
 
     let peer_servers_filepath: &str = "./servers.txt";
-    stats.peer_servers = get_peer_servers(peer_servers_filepath, ip_service);
+    stats.peer_servers = get_peer_servers(peer_servers_filepath, ip_elec);
     stats.sockets_ips = (ip_service.to_string(), ip_elec.to_string());
 
     let service_socket = UdpSocket::bind(ip_service).await.unwrap();
@@ -475,7 +474,7 @@ async fn main() {
     let stats_service = Arc::clone(&stats);
     let stats_election = Arc::clone(&stats);
 
-    let mut service_buffer: [u8; 2048] = [0; 2048];
+    let mut service_buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
     let mut election_buffer: [u8; 2048] = [0; 2048];
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
@@ -506,7 +505,7 @@ async fn main() {
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
 
-                                    let _ = tokio::spawn(async move {
+                                    let h = tokio::spawn(async move {
                                         let default_image =
                                             image::open("default_image.png").unwrap();
                                         let encoder = Encoder::new(&data, default_image);
@@ -525,16 +524,18 @@ async fn main() {
                                             rx,
                                         )
                                         .await;
-                                    })
-                                    .await;
+                                    });
                                 }
                             }
-                            Type::Ack(msg_id, block_id) => channels_map
-                                .get(&msg_id)
-                                .unwrap()
-                                .send(block_id)
-                                .await
-                                .unwrap(),
+                            Type::Ack(msg_id, block_id) => {
+                                println!("ACK: {}", msg_id);
+                                channels_map
+                                    .get(&msg_id)
+                                    .unwrap()
+                                    .send(block_id)
+                                    .await
+                                    .unwrap()
+                            }
 
                             _ => {}
                         }

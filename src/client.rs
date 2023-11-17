@@ -50,19 +50,27 @@ async fn main() {
             msg_type: Type::ClientRequest(id),
             payload: None,
         };
-        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
-        socket.send_to(&serialized_msg, server).await.unwrap();
+        // let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+        let serialized_msg = serde_json::to_string(&msg).unwrap();
+        socket
+            .send_to(serialized_msg.as_bytes(), server)
+            .await
+            .unwrap();
     }
 
     match socket.recv_from(&mut buffer).await {
-        Ok((_bytes_read, src_addr)) => {
+        Ok((bytes_read, src_addr)) => {
             chosen_server = src_addr.to_string();
+            // let response: &str =
+            //     std::str::from_utf8(&buffer[..bytes_read]).expect("Failed to convert to UTF-8");
+            // let msg: String = serde_json::from_str(response).unwrap();
+            println!("{}", chosen_server);
         }
         Err(e) => {
             eprintln!("Error receiving data: {}", e);
         }
     }
-    id += 1;
+    // id += 1;
     std_fs::write(req_id_log_filepath, id.to_string()).unwrap();
 
     // send the img to be encrypted
@@ -71,6 +79,7 @@ async fn main() {
     let msg_id = format!("{}:{}", socket.local_addr().unwrap(), id);
     println!("Message Length {}", contents.len());
     fragment::client_send(contents, socket.clone(), &chosen_server, &msg_id).await;
+    println!("Finished sending pic");
     let data = fragment::recieve(socket.clone()).await;
     let image: Image = serde_cbor::de::from_slice(&data).unwrap();
     let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> =

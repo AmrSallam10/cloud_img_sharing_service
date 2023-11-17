@@ -8,7 +8,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 
-const BUFFER_SIZE: usize = 32768;
+pub const BUFFER_SIZE: usize = 32768;
 const FRAG_SIZE: usize = 4096;
 const BLOCK_SIZE: usize = 2;
 const TIMEOUT_MILLIS: usize = 2000;
@@ -69,6 +69,7 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
     let msg_len = data.len();
 
     let mut buffer = [0; BUFFER_SIZE];
+    println!("{}", msg_id);
 
     let mut curr_block = 0;
     while curr_block < block_num {
@@ -92,11 +93,21 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
                 data: frag_data,
             };
 
-            println!("Sending fragment {} of size {}.", frag_id, data_size);
+            let msg = Msg {
+                sender: socket.local_addr().unwrap(),
+                receiver: SocketAddr::from_str(address).unwrap(),
+                msg_type: Type::Fragment(frag.clone()),
+                payload: None,
+            };
 
-            let frag = serde_cbor::ser::to_vec(&frag).unwrap();
+            println!(
+                "Sending msg wrapping fragment {} of size {}.",
+                frag_id, data_size
+            );
+
+            let msg = serde_cbor::ser::to_vec(&msg).unwrap();
             socket
-                .send_to(&frag, address)
+                .send_to(&msg, address)
                 .await
                 .expect("Failed to send!");
         }
@@ -169,8 +180,8 @@ pub async fn server_send(
             };
 
             println!(
-                "Sending message wrapping fragment {} of size {}.",
-                frag_id, data_size
+                "[{}] Sending message wrapping fragment {} of size {}.",
+                msg_id, frag_id, data_size
             );
 
             let msg = serde_cbor::ser::to_vec(&msg).unwrap();
@@ -193,6 +204,7 @@ pub async fn server_send(
             Some(block_id) = rx.recv() => {
                 // wait for the ack
 
+
                 // TODO: Need logic to handle unexpected messages without breaking select!
                 //       Consider checking if conditions in the matching of branch conditions
                 curr_block += 1;
@@ -214,8 +226,15 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
             Ok((bytes_read, src_addr)) => {
                 println!("{} bytes from {}.", bytes_read, src_addr);
 
-                let frag: Fragment = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
-                println!("Received fragment {}.", frag.frag_id);
+                let msg: Msg = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
+                let frag = match msg.msg_type {
+                    Type::Fragment(frag) => frag,
+                    _ => {
+                        println!("Could not parse fragment");
+                        continue;
+                    }
+                };
+                println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
 
                 let st_idx = FRAG_SIZE * (frag.frag_id as usize);
                 let end_idx = min(
@@ -244,7 +263,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                 } else {
                     // should not be needed since we know key exists
                     let _default_msg = BigMessage::default_msg();
-                    let big_msg = map.entry(frag.msg_id).or_insert(_default_msg);
+                    let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
 
                     if !(big_msg.received_frags.contains(&frag.frag_id)) {
                         big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
@@ -261,12 +280,14 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                             / (FRAG_SIZE * BLOCK_SIZE)
                             - 1;
                         let ack = Msg {
-                            msg_type: Type::Ack(frag.frag_id.to_string(), block_id as u32),
+                            msg_type: Type::Ack(frag.msg_id, block_id as u32),
                             sender: socket.local_addr().unwrap(),
                             receiver: src_addr,
                             payload: None,
                         };
 
+                        println!("{:?}", ack);
+                        println!("{:?}", src_addr);
                         let ack = serde_cbor::ser::to_vec(&ack).unwrap();
                         socket
                             .send_to(&ack, src_addr.to_string())
