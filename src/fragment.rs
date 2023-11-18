@@ -10,8 +10,12 @@ use tokio::time::{self, Duration};
 
 pub const BUFFER_SIZE: usize = 32768;
 pub const FRAG_SIZE: usize = 4096;
-pub const BLOCK_SIZE: usize = 16;
+pub const BLOCK_SIZE: usize = 8;
 pub const TIMEOUT_MILLIS: usize = 2000;
+pub const SERVICE_PORT: usize = 8080;
+pub const ELECTION_PORT: usize = 8081;
+pub const SERVICE_SENDBACK_PORT: usize = 8082;
+pub const SERVERS_FILEPATH: &str = "./servers.txt";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fragment {
@@ -129,7 +133,7 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
 
                 // TODO: Need logic to handle unexpected messages without breaking select!
                 //       Consider checking if conditions in the matching of branch conditions
-                if let Type::Ack(msg_id, block_id) = msg.msg_type{
+                if let Type::Ack(_msg_id, block_id) = msg.msg_type{
                         if block_id == curr_block as u32{
                             curr_block += 1;
                         }
@@ -286,8 +290,6 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                         let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                             / (FRAG_SIZE * BLOCK_SIZE)
                             - 1;
-                        println!("Block id calculated: {}", block_id);
-                        println!("Block id received: {}", frag.block_id);
                         println!("Sending ACK for block {}", block_id);
                         let receiver: SocketAddr =
                             format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
@@ -301,7 +303,6 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                         };
 
                         println!("{:?}", ack);
-                        println!("{:?}", src_addr);
                         let ack = serde_cbor::ser::to_vec(&ack).unwrap();
                         socket
                             .send_to(&ack, receiver.to_string())

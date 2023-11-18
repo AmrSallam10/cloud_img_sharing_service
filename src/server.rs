@@ -9,29 +9,25 @@
 extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
+use image::DynamicImage;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
-use std::cmp::{max, min};
-use std::future::Future;
+use std::cmp::min;
 use std::net::SocketAddr;
-use std::process::Command;
-use std::str::FromStr;
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
-use tokio::select;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, Duration};
 use tokio::{net::UdpSocket, sync::Mutex};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 use steganography::encoder::Encoder;
-use tokio::{fs, runtime};
 
 mod fragment;
 use fragment::{BigMessage, Fragment, Image, Msg, Type};
-use fragment::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE, TIMEOUT_MILLIS};
+use fragment::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE};
+use fragment::{ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_PORT};
+
 // struct to hold server states (modify as needed)
 #[derive(Clone)]
 struct ServerStats {
@@ -40,7 +36,7 @@ struct ServerStats {
     running_elections: HashMap<String, u32>,
     requests_buffer: HashMap<String, Msg>,
     peer_servers: Vec<(SocketAddr, SocketAddr, SocketAddr)>,
-    sockets_ips: (String, String),
+    own_ips: Option<(SocketAddr, SocketAddr, SocketAddr)>,
 }
 
 async fn handle_ok_msg(req_id: String, stats: Arc<Mutex<ServerStats>>) {
@@ -125,9 +121,9 @@ async fn reply_to_client(socket: Arc<UdpSocket>, req_id: String, stats: Arc<Mute
         Some(s) => {
             let s = s.to_owned();
             println!("[{}] Replying to Client", req_id);
-            let addr = &socket.local_addr().unwrap().to_string();
             let target_addr = s.sender;
-            let response = "chosen server";
+            let response = data.own_ips.unwrap().0.to_string();
+            println!("{}", response);
             socket
                 .send_to(response.as_bytes(), target_addr)
                 .await
@@ -273,7 +269,6 @@ async fn handle_client(
     service_socket: Arc<UdpSocket>,
     election_socket: Arc<UdpSocket>,
     stats: Arc<Mutex<ServerStats>>,
-    src_addr: SocketAddr,
 ) {
     let req_id = format!("{}:{}", msg.sender, id);
     println!("[{}] Handling client Request", req_id);
@@ -326,7 +321,6 @@ async fn handle_elec_request(
                 service_socket,
                 election_socket,
                 stats.to_owned(),
-                src_addr,
             )
             .await;
         }
@@ -343,36 +337,18 @@ async fn handle_elec_request(
             )
             .await;
         }
-        Type::CoordinatorBrdCast(coordinator_ip) => {
+        Type::CoordinatorBrdCast(_coordinator_ip) => {
             let req_id = msg.payload.clone().unwrap();
             println!("[{}] Handlign Broadcast!", req_id);
             handle_coordinator(stats.to_owned(), req_id).await;
         }
-        Type::OKMsg(priority) => {
+        Type::OKMsg(_priority) => {
             let req_id = msg.payload.clone().unwrap();
             println!("[{}] Handling OK", req_id);
             handle_ok_msg(req_id, stats.to_owned()).await;
         }
         _ => {}
     }
-}
-
-fn get_peer_servers(
-    filepath: &str,
-    own_ip: SocketAddr,
-) -> Vec<(SocketAddr, SocketAddr, SocketAddr)> {
-    let mut servers = Vec::<(SocketAddr, SocketAddr, SocketAddr)>::new();
-    let contents =
-        std_fs::read_to_string(filepath).expect("Should have been able to read the file");
-    for ip in contents.lines() {
-        if ip != own_ip.to_string() {
-            let elec_ip: SocketAddr = ip.parse().unwrap();
-            let service_ip = SocketAddr::new(elec_ip.ip(), elec_ip.port() - 1);
-            let send_ip = SocketAddr::new(elec_ip.ip(), elec_ip.port() + 1);
-            servers.push((service_ip, elec_ip, send_ip));
-        }
-    }
-    servers
 }
 
 async fn handle_fragmenets(
@@ -428,8 +404,6 @@ async fn handle_fragmenets(
             let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                 / (FRAG_SIZE * BLOCK_SIZE)
                 - 1;
-            println!("Block id calculated: {}", block_id);
-            println!("Block id received: {}", frag.block_id);
             println!("Sending ACK for block {}", block_id);
             let ack = Msg {
                 msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
@@ -446,18 +420,16 @@ async fn handle_fragmenets(
         }
         if new_frag && big_msg.received_len == big_msg.msg_len {
             println!("Full message is received!");
-            let big_msg = big_msg.to_owned();
             return Some(frag.msg_id);
         }
     }
     None
 }
 
-async fn encode(data: Vec<u8>, req_id: &str) -> Vec<u8> {
+async fn encode(data: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
     let (send, receive) = tokio::sync::oneshot::channel();
-    println!("[{}] Started encryption image size {}", req_id, data.len());
     rayon::spawn(move || {
-        let default_image = image::open("default_image.png").unwrap();
+        println!("[{}] Started encryption. Image size {}", req_id, data.len());
         let encoder = Encoder::new(&data, default_image);
         let encoded_image = encoder.encode_alpha();
         let image = Image {
@@ -468,17 +440,18 @@ async fn encode(data: Vec<u8>, req_id: &str) -> Vec<u8> {
         let _ = send.send(encoded_bytes);
     });
 
-    receive.await.expect("Rayon Panicked")
+    receive.await.expect("Rayon Panicked [encrption]")
 }
 
 async fn handle_encryption(
     data: Vec<u8>,
     socket: Arc<UdpSocket>,
     src_addr: SocketAddr,
-    req_id: &str,
+    req_id: String,
     rx: mpsc::Receiver<u32>,
+    default_image: DynamicImage,
 ) {
-    let encoded_bytes = encode(data, req_id).await;
+    let encoded_bytes = encode(data, req_id.clone(), default_image).await;
     println!(
         "[{}] finished encryption, image size is {}",
         req_id,
@@ -488,55 +461,90 @@ async fn handle_encryption(
         encoded_bytes,
         socket.clone(),
         src_addr.to_string().as_str(),
-        req_id,
+        req_id.as_str(),
         rx,
     )
     .await;
 }
 
+async fn get_peer_servers(
+    filepath: &str,
+    own_ips: (SocketAddr, SocketAddr, SocketAddr),
+    mode: &str,
+) -> Vec<(SocketAddr, SocketAddr, SocketAddr)> {
+    let mut servers = Vec::<(SocketAddr, SocketAddr, SocketAddr)>::new();
+    let contents =
+        std_fs::read_to_string(filepath).expect("Should have been able to read the file");
+    for ip in contents.lines() {
+        let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
+        if own_ips.0 != ip_service {
+            servers.push((ip_service, ip_elec, ip_send));
+        }
+    }
+    servers
+}
+
+async fn get_ips(ip: &str, mode: &str) -> (SocketAddr, SocketAddr, SocketAddr) {
+    let (ip_service, ip_elec, ip_send): (SocketAddr, SocketAddr, SocketAddr) = match mode {
+        "local" => {
+            // In local mode, assume the provided IP includes the port number
+            let ip_elec: SocketAddr = ip.parse().expect("Failed to parse ip");
+            let ip_service = SocketAddr::new(ip_elec.ip(), ip_elec.port() - 1);
+            let ip_send = SocketAddr::new(ip_elec.ip(), ip_elec.port() + 1);
+            (ip_service, ip_elec, ip_send)
+        }
+        "dist" => {
+            // In distributed mode, no port number, defined by CONSTS
+            let ip_service: SocketAddr = format!("{}:{}", ip, SERVICE_PORT)
+                .parse()
+                .expect("Failed to parse ip");
+            let ip_elec: SocketAddr = format!("{}:{}", ip, ELECTION_PORT)
+                .parse()
+                .expect("Failed to parse ip");
+            let ip_send: SocketAddr = format!("{}:{}", ip, SERVICE_SENDBACK_PORT)
+                .parse()
+                .expect("Failed to parse ip");
+            (ip_service, ip_elec, ip_send)
+        }
+        _ => {
+            eprintln!("Invalid mode. Use 'local' or 'distributed'.");
+            std::process::exit(1);
+        }
+    };
+    (ip_service, ip_elec, ip_send)
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
-    // let runtime = runtime::Builder::new_multi_thread()
-    //     .worker_threads(4)
-    //     .enable_all()
-    //     .build()
-    //     .unwrap();
-
     let mut stats = ServerStats::new();
     let args: Vec<_> = env::args().collect();
+    let mode = args[1].as_str();
+    let ip = args[2].as_str();
+    let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
 
-    let ip_service: SocketAddr = args[1].as_str().parse().unwrap();
-    let ip_elec = SocketAddr::new(ip_service.ip(), ip_service.port() + 1);
-    let ip_send = SocketAddr::new(ip_service.ip(), ip_service.port() + 2);
+    stats.own_ips = Some((ip_service, ip_elec, ip_send));
+    stats.peer_servers = get_peer_servers(SERVERS_FILEPATH, stats.own_ips.unwrap(), mode).await;
+    println!("{:?}", stats.peer_servers);
 
-    let peer_servers_filepath: &str = "./servers.txt";
-    stats.peer_servers = get_peer_servers(peer_servers_filepath, ip_elec);
-    stats.sockets_ips = (ip_service.to_string(), ip_elec.to_string());
-
-    let service_socket = UdpSocket::bind(ip_service).await.unwrap();
-    println!("Server (service) listening on {ip_service}");
-    let service_socket = Arc::new(service_socket);
+    let service_socket = Arc::new(UdpSocket::bind(ip_service).await.unwrap());
     let service_socket2 = Arc::clone(&service_socket);
+    println!("Server (service) listening on {ip_service}");
 
-    let election_socket = UdpSocket::bind(ip_elec).await.unwrap();
+    let election_socket = Arc::new(UdpSocket::bind(ip_elec).await.unwrap());
     println!("Server (election) listening on {ip_elec}");
-    let election_socket = Arc::new(election_socket);
-    let election_socket2 = Arc::clone(&election_socket);
 
-    let send_socket = UdpSocket::bind(ip_send).await.unwrap();
+    let send_socket = Arc::new(UdpSocket::bind(ip_send).await.unwrap());
     println!("Server (send back) on {ip_send}");
-    let send_socket = Arc::new(send_socket);
-    let send_socket2 = Arc::clone(&send_socket);
 
     let stats = Arc::new(Mutex::new(stats));
-    let stats_service = Arc::clone(&stats);
     let stats_election = Arc::clone(&stats);
 
     let mut service_buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
     let mut election_buffer: [u8; 2048] = [0; 2048];
 
-    let mut map: HashMap<String, BigMessage> = HashMap::new();
+    let mut received_complete_msgs: HashMap<String, BigMessage> = HashMap::new();
     let mut channels_map: HashMap<String, mpsc::Sender<u32>> = HashMap::new();
+    let default_image: DynamicImage = image::open("default_image.png").unwrap();
 
     let h1 = tokio::spawn({
         async move {
@@ -545,36 +553,42 @@ async fn main() {
                     Ok((bytes_read, src_addr)) => {
                         println!("{} bytes from {}.", bytes_read, src_addr);
 
-                        let msg: Msg =
-                            serde_cbor::de::from_slice(&service_buffer[..bytes_read]).unwrap();
+                        let msg: Msg = serde_cbor::de::from_slice(&service_buffer[..bytes_read])
+                            .expect("Failed to deserialize msg from service socket");
 
                         match msg.msg_type {
                             Type::Fragment(frag) => {
-                                let service_socket = Arc::clone(&service_socket);
-                                let send_socket = Arc::clone(&send_socket);
+                                let service_socket = service_socket.clone();
+                                let send_socket = send_socket.clone();
+
                                 if let Some(req_id) = handle_fragmenets(
                                     service_socket.clone(),
                                     frag,
                                     src_addr,
-                                    &mut map,
+                                    &mut received_complete_msgs,
                                 )
                                 .await
                                 {
-                                    let data = map.get(&req_id).unwrap().data.to_owned();
+                                    let data = received_complete_msgs
+                                        .get(&req_id)
+                                        .unwrap()
+                                        .data
+                                        .to_owned();
+                                    received_complete_msgs.remove(&req_id);
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
-                                    {
-                                        tokio::spawn(async move {
-                                            handle_encryption(
-                                                data,
-                                                send_socket,
-                                                src_addr,
-                                                &req_id,
-                                                rx,
-                                            )
-                                            .await
-                                        });
-                                    }
+                                    let default_image = default_image.clone();
+                                    tokio::spawn(async move {
+                                        handle_encryption(
+                                            data,
+                                            send_socket,
+                                            src_addr,
+                                            req_id.clone(),
+                                            rx,
+                                            default_image.clone(),
+                                        )
+                                        .await
+                                    });
                                 }
                             }
                             Type::Ack(msg_id, block_id) => {
@@ -636,7 +650,7 @@ impl ServerStats {
             elections_received_oks: HashSet::new(),
             running_elections: HashMap::new(),
             peer_servers: Vec::new(),
-            sockets_ips: (String::new(), String::new()),
+            own_ips: None,
         }
     }
 
