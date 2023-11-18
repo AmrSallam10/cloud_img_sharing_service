@@ -9,6 +9,7 @@
 extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
+use image::DynamicImage;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
@@ -453,11 +454,11 @@ async fn handle_fragmenets(
     None
 }
 
-async fn encode(data: Vec<u8>, req_id: &str) -> Vec<u8> {
+async fn encode(data: Vec<u8>, req_id: &str, default_image:DynamicImage) -> Vec<u8> {
     let (send, receive) = tokio::sync::oneshot::channel();
     println!("[{}] Started encryption image size {}", req_id, data.len());
     rayon::spawn(move || {
-        let default_image = image::open("default_image.png").unwrap();
+        // let default_image = image::open("default_image.png").unwrap();
         let encoder = Encoder::new(&data, default_image);
         let encoded_image = encoder.encode_alpha();
         let image = Image {
@@ -477,8 +478,9 @@ async fn handle_encryption(
     src_addr: SocketAddr,
     req_id: &str,
     rx: mpsc::Receiver<u32>,
+    default_image:DynamicImage
 ) {
-    let encoded_bytes = encode(data, req_id).await;
+    let encoded_bytes = encode(data, req_id, default_image).await;
     println!(
         "[{}] finished encryption, image size is {}",
         req_id,
@@ -537,6 +539,7 @@ async fn main() {
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
     let mut channels_map: HashMap<String, mpsc::Sender<u32>> = HashMap::new();
+    let default_image = image::open("default_image_flower.png").unwrap();
 
     let h1 = tokio::spawn({
         async move {
@@ -563,18 +566,19 @@ async fn main() {
                                     let data = map.get(&req_id).unwrap().data.to_owned();
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
-                                    {
-                                        tokio::spawn(async move {
-                                            handle_encryption(
-                                                data,
-                                                send_socket,
-                                                src_addr,
-                                                &req_id,
-                                                rx,
-                                            )
-                                            .await
-                                        });
-                                    }
+                                    let default_image = default_image.clone();
+                                    tokio::spawn(async move {
+                                        handle_encryption(
+                                            data,
+                                            send_socket,
+                                            src_addr,
+                                            &req_id,
+                                            rx,
+                                            default_image,
+                                        )
+                                        .await
+                                    });
+                                    
                                 }
                             }
                             Type::Ack(msg_id, block_id) => {

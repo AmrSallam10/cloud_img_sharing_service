@@ -28,11 +28,18 @@ fn get_req_id_log(filepath: &str) -> u32 {
     }
 }
 
+fn save_image_buffer(image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>>, filename: String) {
+    let image = image::DynamicImage::ImageRgba8(image_buffer);
+    image.save(filename).unwrap();
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = env::args().collect();
     let ip: &str = args[1].as_str();
     let pic_path: &str = args[2].as_str();
+    let pic_name = pic_path.split('.').next().unwrap();
+  
     let ip = SocketAddr::from_str(ip).unwrap();
     let servers_filepath = "./servers.txt";
     let req_id_log_filepath = "./req_id_log.txt";
@@ -82,14 +89,17 @@ async fn main() {
     fragment::client_send(contents, socket.clone(), &chosen_server, &msg_id).await;
     println!("Finished sending pic");
     let data = fragment::recieve(socket.clone()).await;
+    println!("Deserializing image here:");
     let image: Image = serde_cbor::de::from_slice(&data).unwrap();
     let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> =
         image::ImageBuffer::from_raw(image.dims.0, image.dims.1, image.data).unwrap();
-    steganography::util::save_image_buffer(
+    println!("Saving image here:");
+    save_image_buffer(
         image_buffer.clone(),
-        format!("encoded_output_{pic_path}.jpeg"),
+        format!("encoded_output_{pic_name}.jpg"),
     );
+    println!("Decoding image here");
     let decoder = Decoder::new(image_buffer);
     let secret_bytes = decoder.decode_alpha();
-    let _ = tokio::fs::write(format!("secret_{pic_path}.jpg"), secret_bytes).await;
+    let _ = tokio::fs::write(format!("secret_{pic_name}.jpg"), secret_bytes).await;
 }
