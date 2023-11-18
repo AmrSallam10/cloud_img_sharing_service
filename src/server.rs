@@ -476,9 +476,9 @@ async fn send_fail_msg(socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) 
         payload: None,
     };
 
-    let fail_msg = serde_cbor::ser::to_vec(&fail_msg).unwrap();
+    let fail_msg = serde_json::to_string(&fail_msg).unwrap();
     socket
-        .send_to(&fail_msg, next_server.to_string())
+        .send_to(fail_msg.as_bytes(), next_server.to_string())
         .await
         .expect("Failed to send!");
 }
