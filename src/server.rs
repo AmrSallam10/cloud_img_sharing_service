@@ -614,16 +614,15 @@ async fn main() {
 
                                     println!("{}", data.len());
 
-                                    // let default_image = match data.len() {
-                                    //     len if len > 10900000 => def6.clone(),
-                                    //     len if len > 4400000 => def5.clone(),
-                                    //     len if len > 2800000 => def4.clone(),
-                                    //     len if len > 960000 => def3.clone(),
-                                    //     len if len > 450000 => def2.clone(),
-                                    //     _ => def1.clone(),
+                                    let default_image = match data.len() {
+                                        len if len > 9100000 => def6.clone(),
+                                        len if len > 3000000 => def5.clone(),
+                                        len if len > 2100000 => def4.clone(),
+                                        len if len > 670000 => def3.clone(),
+                                        len if len > 350000 => def2.clone(),
+                                        _ => def1.clone(),
 
-                                    let default_image = def3.clone();
-                                    // };
+                                    };
 
                                     // let mut default_image = def3.clone();
 
