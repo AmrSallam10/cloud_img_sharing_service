@@ -19,10 +19,10 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio::{net::UdpSocket, sync::Mutex};
 
+use image::{ImageBuffer, Rgba};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use steganography::encoder::Encoder;
-use image::{ImageBuffer, Rgba};
 
 mod fragment;
 use fragment::{BigMessage, Fragment, Image, Msg, Type};
@@ -430,7 +430,11 @@ async fn handle_fragmenets(
 async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
     let (send, receive) = tokio::sync::oneshot::channel();
     rayon::spawn(move || {
-        println!("[{}] Started encryption. Image size {}", req_id, secret_bytes.len());
+        println!(
+            "[{}] Started encryption. Image size {}",
+            req_id,
+            secret_bytes.len()
+        );
         // let encoder = Encoder::new(&data, default_image);
         // let encoded_image = encoder.encode_alpha();
 
@@ -438,24 +442,21 @@ async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicIma
         let (width, height) = img.dimensions();
         let bytes = width * height;
 
-        if secret_bytes.len() > bytes as usize{
+        if secret_bytes.len() > bytes as usize {
             panic!("secret_bytes is too large for image size");
         }
 
         let mut encoded_image = img.clone();
 
-        for (x, y, pixel) in encoded_image.enumerate_pixels_mut() {        
+        for (x, y, pixel) in encoded_image.enumerate_pixels_mut() {
             let secret_bytes_index = x + (y * width);
-            
-            if secret_bytes_index < secret_bytes.len() as u32{
-                pixel[3] = secret_bytes[secret_bytes_index as usize];
-            }
 
-            else {
+            if secret_bytes_index < secret_bytes.len() as u32 {
+                pixel[3] = secret_bytes[secret_bytes_index as usize];
+            } else {
                 // If secret bytes are exhausted, break out of the loop
                 break;
             }
-
         }
 
         let image = Image {
@@ -578,7 +579,6 @@ async fn main() {
     let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
     let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
     let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
-    
 
     let h1 = tokio::spawn({
         async move {
@@ -612,25 +612,35 @@ async fn main() {
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
 
-                                    if data.len() < 450 {
-                                        let default_image = def1.clone();
-                                    }
-                                    else if data.len() < 960000 {
-                                        let default_image = def2.clone();
-                                    }
-                                    else if data.len() < 2700000 {
-                                        let default_image = def3.clone();
-                                    }
-                                    else if data.len() < 4200000 {
-                                        let default_image = def4.clone();
-                                    }
-                                    else if data.len() < 10500000 {
-                                        let default_image = def5.clone();
-                                    }
-                                    else {
-                                        let default_image = def6.clone();
-                                    }
-                                    
+                                    println!("{}", data.len());
+
+                                    // let default_image = match data.len() {
+                                    //     len if len > 10900000 => def6.clone(),
+                                    //     len if len > 4400000 => def5.clone(),
+                                    //     len if len > 2800000 => def4.clone(),
+                                    //     len if len > 960000 => def3.clone(),
+                                    //     len if len > 450000 => def2.clone(),
+                                    //     _ => def1.clone(),
+
+                                    let default_image = def3.clone();
+                                    // };
+
+                                    // let mut default_image = def3.clone();
+
+                                    // if data.len() > 10900000 {
+                                    //     default_image = def6.clone();
+                                    // } else if data.len() > 4400000 {
+                                    //     default_image = def5.clone();
+                                    // } else if data.len() > 2800000 {
+                                    //     default_image = def4.clone();
+                                    // } else if data.len() > 960000 {
+                                    //     default_image = def3.clone();
+                                    // } else if data.len() > 450000 {
+                                    //     default_image = def2.clone();
+                                    // } else {
+                                    //     default_image = def1.clone();
+                                    // }
+
                                     tokio::spawn(async move {
                                         handle_encryption(
                                             data,
@@ -638,7 +648,7 @@ async fn main() {
                                             src_addr,
                                             req_id.clone(),
                                             rx,
-                                            default_image,
+                                            default_image.clone(),
                                         )
                                         .await
                                     });
