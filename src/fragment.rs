@@ -298,9 +298,9 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                         if msg.received_len == msg.msg_len {
                             println!("Full message is received!");
                             let msg = msg.to_owned();
+                            e.insert(msg.clone());
                             return msg.data;
                         }
-
                         e.insert(msg);
                     } else {
                         // should not be needed since we know key exists

@@ -406,6 +406,7 @@ async fn handle_fragmenets(
         }
         if msg.received_len == msg.msg_len {
             println!("Full message is received!");
+            e.insert(msg);
             return Some(frag.msg_id);
         }
         e.insert(msg);
