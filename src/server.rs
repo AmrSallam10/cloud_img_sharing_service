@@ -41,6 +41,7 @@ struct ServerStats {
     requests_buffer: HashMap<String, Msg>,
     peer_servers: Vec<(SocketAddr, SocketAddr, SocketAddr)>,
     own_ips: Option<(SocketAddr, SocketAddr, SocketAddr)>,
+    down: bool,
 }
 
 async fn handle_ok_msg(req_id: String, stats: Arc<Mutex<ServerStats>>) {
@@ -484,10 +485,12 @@ async fn send_fail_msg(socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) 
 }
 
 async fn handle_fail_msg(fail_time: u32, socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) {
-    let sleep_time = std_duration::from_secs(fail_time as u64);
-    std_sleep(sleep_time);
-    send_fail_msg(socket, stats).await;
+    let sleep_time = Duration::from_secs(fail_time as u64);
+    stats.lock().await.down = true;
+    sleep(sleep_time).await;
     println!("Woke Up!");
+    stats.lock().await.down = false;
+    send_fail_msg(socket, stats).await;
 }
 
 async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
@@ -730,6 +733,9 @@ async fn main() {
             loop {
                 match election_socket.recv_from(&mut election_buffer).await {
                     Ok((bytes_read, src_addr)) => {
+                        if stats.lock().await.down {
+                            continue;
+                        }
                         let service_socket = Arc::clone(&service_socket2);
                         let election_socket = Arc::clone(&election_socket);
                         let stats_clone = Arc::clone(&stats_election);
@@ -765,6 +771,7 @@ impl ServerStats {
             running_elections: HashMap::new(),
             peer_servers: Vec::new(),
             own_ips: None,
+            down: false,
         }
     }
 
