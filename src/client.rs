@@ -32,6 +32,7 @@ fn get_req_id_log(filepath: &str) -> u32 {
 async fn main() {
     let args: Vec<_> = env::args().collect();
     let ip: &str = args[1].as_str();
+    let pic_path: &str = args[2].as_str();
     let ip = SocketAddr::from_str(ip).unwrap();
     let servers_filepath = "./servers.txt";
     let req_id_log_filepath = "./req_id_log.txt";
@@ -74,7 +75,7 @@ async fn main() {
     std_fs::write(req_id_log_filepath, id.to_string()).unwrap();
 
     // send the img to be encrypted
-    let contents = fs::read("pic.jpg").await.unwrap();
+    let contents = fs::read(pic_path).await.unwrap();
     let socket = Arc::new(socket);
     let msg_id = format!("{}:{}", socket.local_addr().unwrap(), id);
     println!("Message Length {}", contents.len());
@@ -84,8 +85,11 @@ async fn main() {
     let image: Image = serde_cbor::de::from_slice(&data).unwrap();
     let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> =
         image::ImageBuffer::from_raw(image.dims.0, image.dims.1, image.data).unwrap();
-    steganography::util::save_image_buffer(image_buffer.clone(), "encoded_output.jpeg".to_string());
+    steganography::util::save_image_buffer(
+        image_buffer.clone(),
+        format!("encoded_output_{pic_path}.jpeg"),
+    );
     let decoder = Decoder::new(image_buffer);
     let secret_bytes = decoder.decode_alpha();
-    let _ = tokio::fs::write("secret.jpg", secret_bytes).await;
+    let _ = tokio::fs::write(format!("secret_{pic_path}.jpg"), secret_bytes).await;
 }

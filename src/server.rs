@@ -386,7 +386,8 @@ async fn handle_fragmenets(
     src_addr: std::net::SocketAddr,
     map: &mut HashMap<String, BigMessage>,
 ) -> Option<String> {
-    println!("Received fragment {}.", frag.frag_id);
+    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+    let mut new_frag = false;
 
     let st_idx = FRAG_SIZE * (frag.frag_id as usize);
     let end_idx = min(
@@ -421,15 +422,20 @@ async fn handle_fragmenets(
 
             big_msg.received_len += (end_idx - st_idx) as u32;
             big_msg.received_frags.insert(frag.frag_id);
+            new_frag = true;
         }
 
-        if big_msg.received_len == big_msg.msg_len
-            || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+        if new_frag
+            && (big_msg.received_len == big_msg.msg_len
+                || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
         {
             // send ack
             let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                 / (FRAG_SIZE * BLOCK_SIZE)
                 - 1;
+            println!("Block id calculated: {}", block_id);
+            println!("Block id received: {}", frag.block_id);
+            println!("Sending ACK for block {}", block_id);
             let ack = Msg {
                 msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
                 sender: socket.local_addr().unwrap(),
@@ -443,7 +449,7 @@ async fn handle_fragmenets(
                 .await
                 .expect("Failed to send!");
         }
-        if big_msg.received_len == big_msg.msg_len {
+        if new_frag && big_msg.received_len == big_msg.msg_len {
             println!("Full message is received!");
             let big_msg = big_msg.to_owned();
             return Some(frag.msg_id);
@@ -452,7 +458,35 @@ async fn handle_fragmenets(
     None
 }
 
-#[tokio::main]
+async fn handle_encryption(
+    data: Vec<u8>,
+    socket: Arc<UdpSocket>,
+    src_addr: SocketAddr,
+    req_id: &str,
+    rx: mpsc::Receiver<u32>,
+) {
+    println!("[{}] Started encryption", req_id);
+    let default_image = image::open("default_image.png").unwrap();
+    let encoder = Encoder::new(&data, default_image);
+    let encoded_image = encoder.encode_alpha();
+    let image = Image {
+        dims: encoded_image.dimensions(),
+        data: encoded_image.into_raw(),
+    };
+    println!("[{}] finished encryption", req_id);
+
+    let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
+    fragment::server_send(
+        encoded_bytes,
+        socket.clone(),
+        src_addr.to_string().as_str(),
+        req_id,
+        rx,
+    )
+    .await;
+}
+
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     // let runtime = runtime::Builder::new_multi_thread()
     //     .worker_threads(4)
@@ -521,27 +555,18 @@ async fn main() {
                                     let data = map.get(&req_id).unwrap().data.to_owned();
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
-
-                                    tokio::spawn(async move {
-                                        let default_image =
-                                            image::open("default_image.png").unwrap();
-                                        let encoder = Encoder::new(&data, default_image);
-                                        let encoded_image = encoder.encode_alpha();
-                                        let image = Image {
-                                            dims: encoded_image.dimensions(),
-                                            data: encoded_image.into_raw(),
-                                        };
-
-                                        let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
-                                        fragment::server_send(
-                                            encoded_bytes,
-                                            send_socket.clone(),
-                                            src_addr.to_string().as_str(),
-                                            &req_id,
-                                            rx,
-                                        )
-                                        .await;
-                                    });
+                                    {
+                                        tokio::spawn(async move {
+                                            handle_encryption(
+                                                data,
+                                                send_socket,
+                                                src_addr,
+                                                &req_id,
+                                                rx,
+                                            )
+                                            .await
+                                        });
+                                    }
                                 }
                             }
                             Type::Ack(msg_id, block_id) => {
@@ -553,12 +578,8 @@ async fn main() {
                                     .await
                                     .unwrap()
                             }
-
                             _ => {}
                         }
-                        // for join_handle in join_handles.drain(..) {
-                        //     join_handle.await.unwrap();
-                        // }
                     }
                     Err(e) => {
                         eprintln!("Error receiving data: {}", e);

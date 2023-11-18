@@ -16,6 +16,7 @@ const TIMEOUT_MILLIS: usize = 2000;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fragment {
     pub msg_id: String,
+    pub block_id: u32,
     pub frag_id: u32,
     pub msg_len: u32, // as bytes
     pub data: Vec<u8>,
@@ -88,6 +89,7 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
 
             let frag = Fragment {
                 msg_id: String::from(msg_id),
+                block_id: curr_block as u32,
                 frag_id: frag_id as u32,
                 msg_len: msg_len as u32,
                 data: frag_data,
@@ -115,10 +117,7 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
         let sleep = time::sleep(Duration::from_millis(TIMEOUT_MILLIS as u64));
         tokio::pin!(sleep);
 
-        println!(
-            "Waiting for an ACK for block {}. Timeout {} milli seconds.",
-            curr_block, TIMEOUT_MILLIS
-        );
+        println!("Waiting for an ACK for block {}", curr_block);
 
         // wait for an ack
         tokio::select! {
@@ -172,6 +171,7 @@ pub async fn server_send(
 
             let frag = Fragment {
                 msg_id: String::from(msg_id),
+                block_id: curr_block as u32,
                 frag_id: frag_id as u32,
                 msg_len: msg_len as u32,
                 data: frag_data,
@@ -199,10 +199,7 @@ pub async fn server_send(
         let sleep = time::sleep(Duration::from_millis(TIMEOUT_MILLIS as u64));
         tokio::pin!(sleep);
 
-        println!(
-            "Waiting for an ACK for block {}. Timeout {} milli seconds.",
-            curr_block, TIMEOUT_MILLIS
-        );
+        println!("Waiting for an ACK for block {}", curr_block);
 
         // wait for an ack
         tokio::select! {
@@ -242,6 +239,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                     }
                 };
                 println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+                let mut new_frag = false;
 
                 let st_idx = FRAG_SIZE * (frag.frag_id as usize);
                 let end_idx = min(
@@ -277,15 +275,20 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
 
                         big_msg.received_len += (end_idx - st_idx) as u32;
                         big_msg.received_frags.insert(frag.frag_id);
+                        new_frag = true;
                     }
 
-                    if big_msg.received_len == big_msg.msg_len
-                        || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+                    if new_frag
+                        && (big_msg.received_len == big_msg.msg_len
+                            || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
                     {
                         // send ack
                         let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                             / (FRAG_SIZE * BLOCK_SIZE)
                             - 1;
+                        println!("Block id calculated: {}", block_id);
+                        println!("Block id received: {}", frag.block_id);
+                        println!("Sending ACK for block {}", block_id);
                         let receiver: SocketAddr =
                             format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
                                 .parse()
@@ -305,7 +308,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                             .await
                             .expect("Failed to send!");
                     }
-                    if big_msg.received_len == big_msg.msg_len {
+                    if new_frag && big_msg.received_len == big_msg.msg_len {
                         println!("Full message is received!");
                         let big_msg = big_msg.to_owned();
                         return big_msg.data;
