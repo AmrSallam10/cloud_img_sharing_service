@@ -104,9 +104,35 @@ async fn decode_image(img: ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<u8> {
     out
 }
 
+fn create_output_dirs(){
+    let base_directory = "output";
+    let encoded_directory = "output/encoded";
+    let decoded_directory = "output/decoded";
+
+    // Attempt to create the entire directory structure
+    if let Err(err) = std_fs::create_dir_all(encoded_directory) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            println!("Directory '{}' already exists.", encoded_directory);
+        } else {
+            println!("Error creating directory '{}': {:?}", encoded_directory, err);
+            return; // Abo  rt if an error occurs
+        }
+    }
+
+    if let Err(err) = std_fs::create_dir_all(decoded_directory) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            println!("Directory '{}' already exists.", decoded_directory);
+        } else {
+            println!("Error creating directory '{}': {:?}", decoded_directory, err);
+            return; // Abort if an error occurs
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = env::args().collect();
+    create_output_dirs();
     let mode = args[1].as_str();
     let ip: SocketAddr = args[2]
         .as_str()
