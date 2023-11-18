@@ -621,24 +621,7 @@ async fn main() {
                                         len if len > 670000 => def3.clone(),
                                         len if len > 350000 => def2.clone(),
                                         _ => def1.clone(),
-
                                     };
-
-                                    // let mut default_image = def3.clone();
-
-                                    // if data.len() > 10900000 {
-                                    //     default_image = def6.clone();
-                                    // } else if data.len() > 4400000 {
-                                    //     default_image = def5.clone();
-                                    // } else if data.len() > 2800000 {
-                                    //     default_image = def4.clone();
-                                    // } else if data.len() > 960000 {
-                                    //     default_image = def3.clone();
-                                    // } else if data.len() > 450000 {
-                                    //     default_image = def2.clone();
-                                    // } else {
-                                    //     default_image = def1.clone();
-                                    // }
 
                                     tokio::spawn(async move {
                                         handle_encryption(

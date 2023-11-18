@@ -128,17 +128,17 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
             Ok((bytes_read, _)) = socket.recv_from(&mut buffer) => {
                 // wait for the ack
 
-                let msg: Msg = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
-                println!("{:?}", msg);
+                if let Ok(msg) = serde_cbor::de::from_slice::<Msg>(&buffer[..bytes_read]){
+                    println!("{:?}", msg);
 
-                // TODO: Need logic to handle unexpected messages without breaking select!
-                //       Consider checking if conditions in the matching of branch conditions
-                if let Type::Ack(_msg_id, block_id) = msg.msg_type{
-                        if block_id == curr_block as u32{
-                            curr_block += 1;
-                        }
+                    // TODO: Need logic to handle unexpected messages without breaking select!
+                    //       Consider checking if conditions in the matching of branch conditions
+                    if let Type::Ack(_msg_id, block_id) = msg.msg_type{
+                            if block_id == curr_block as u32{
+                                curr_block += 1;
+                            }
+                    };
                 };
-
             }
             _ = &mut sleep => {
                 println!("timeout");
@@ -234,87 +234,92 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
             Ok((bytes_read, src_addr)) => {
                 println!("{} bytes from {}.", bytes_read, src_addr);
 
-                let msg: Msg = serde_cbor::de::from_slice(&buffer[..bytes_read]).unwrap();
-                let frag = match msg.msg_type {
-                    Type::Fragment(frag) => frag,
-                    _ => {
-                        println!("Could not parse fragment");
-                        continue;
-                    }
-                };
-                println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
-                let mut new_frag = false;
-
-                let st_idx = FRAG_SIZE * (frag.frag_id as usize);
-                let end_idx = min(
-                    FRAG_SIZE * (frag.frag_id + 1) as usize,
-                    frag.msg_len as usize,
-                );
-
-                // if this is the first fragment create a new entry in the map
-                if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone())
-                {
-                    let mut msg_data = vec![0; frag.msg_len as usize];
-
-                    msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
-
-                    let mut received_frags = HashSet::new();
-                    received_frags.insert(frag.frag_id);
-
-                    let msg = BigMessage {
-                        data: msg_data,
-                        msg_len: frag.msg_len,
-                        received_len: (end_idx - st_idx) as u32,
-                        received_frags,
+                if let Ok(msg) = serde_cbor::de::from_slice::<Msg>(&buffer[..bytes_read]) {
+                    let frag = match msg.msg_type {
+                        Type::Fragment(frag) => frag,
+                        _ => {
+                            println!("Could not parse fragment");
+                            continue;
+                        }
                     };
+                    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+                    let mut new_frag = false;
 
-                    e.insert(msg);
-                } else {
-                    // should not be needed since we know key exists
-                    let _default_msg = BigMessage::default_msg();
-                    let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
+                    let st_idx = FRAG_SIZE * (frag.frag_id as usize);
+                    let end_idx = min(
+                        FRAG_SIZE * (frag.frag_id + 1) as usize,
+                        frag.msg_len as usize,
+                    );
 
-                    if !(big_msg.received_frags.contains(&frag.frag_id)) {
-                        big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
-
-                        big_msg.received_len += (end_idx - st_idx) as u32;
-                        big_msg.received_frags.insert(frag.frag_id);
-                        new_frag = true;
-                    }
-
-                    if new_frag
-                        && (big_msg.received_len == big_msg.msg_len
-                            || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
+                    // if this is the first fragment create a new entry in the map
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        map.entry(frag.msg_id.clone())
                     {
-                        // send ack
-                        let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
-                            / (FRAG_SIZE * BLOCK_SIZE)
-                            - 1;
-                        println!("Sending ACK for block {}", block_id);
-                        let receiver: SocketAddr =
-                            format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
-                                .parse()
-                                .unwrap();
-                        let ack = Msg {
-                            msg_type: Type::Ack(frag.msg_id, block_id as u32),
-                            sender: socket.local_addr().unwrap(),
-                            receiver,
-                            payload: None,
+                        let mut msg_data = vec![0; frag.msg_len as usize];
+
+                        msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+                        let mut received_frags = HashSet::new();
+                        received_frags.insert(frag.frag_id);
+
+                        let msg = BigMessage {
+                            data: msg_data,
+                            msg_len: frag.msg_len,
+                            received_len: (end_idx - st_idx) as u32,
+                            received_frags,
                         };
 
-                        println!("{:?}", ack);
-                        let ack = serde_cbor::ser::to_vec(&ack).unwrap();
-                        socket
-                            .send_to(&ack, receiver.to_string())
-                            .await
-                            .expect("Failed to send!");
+                        e.insert(msg);
+                    } else {
+                        // should not be needed since we know key exists
+                        let _default_msg = BigMessage::default_msg();
+                        let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
+
+                        if !(big_msg.received_frags.contains(&frag.frag_id)) {
+                            big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+                            big_msg.received_len += (end_idx - st_idx) as u32;
+                            big_msg.received_frags.insert(frag.frag_id);
+                            new_frag = true;
+                        }
+
+                        if new_frag
+                            && (big_msg.received_len == big_msg.msg_len
+                                || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
+                        {
+                            // send ack
+                            let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE
+                                - 1)
+                                / (FRAG_SIZE * BLOCK_SIZE)
+                                - 1;
+                            println!("Sending ACK for block {}", block_id);
+                            let receiver: SocketAddr =
+                                format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
+                                    .parse()
+                                    .unwrap();
+                            let ack = Msg {
+                                msg_type: Type::Ack(frag.msg_id, block_id as u32),
+                                sender: socket.local_addr().unwrap(),
+                                receiver,
+                                payload: None,
+                            };
+
+                            println!("{:?}", ack);
+                            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+                            socket
+                                .send_to(&ack, receiver.to_string())
+                                .await
+                                .expect("Failed to send!");
+                        }
+                        if new_frag && big_msg.received_len == big_msg.msg_len {
+                            println!("Full message is received!");
+                            let big_msg = big_msg.to_owned();
+                            return big_msg.data;
+                        }
                     }
-                    if new_frag && big_msg.received_len == big_msg.msg_len {
-                        println!("Full message is received!");
-                        let big_msg = big_msg.to_owned();
-                        return big_msg.data;
-                    }
-                }
+                } else {
+                    continue;
+                };
             }
             Err(e) => {
                 eprintln!("Error receiving data: {}", e);

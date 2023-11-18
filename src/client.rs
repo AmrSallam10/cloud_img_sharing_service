@@ -56,10 +56,10 @@ async fn send_init_request_to_cloud(
     mode: &str,
 ) -> Option<SocketAddr> {
     let servers = get_servers(SERVERS_FILEPATH, mode);
-    println!("{:?}", servers);
     let mut buffer = [0; 1024];
 
     for server in &servers {
+        println!("Sending to server {}", server);
         let server_ip: SocketAddr = server
             .parse()
             .expect("Failed to parse server ip from servers.tx");
@@ -116,7 +116,6 @@ async fn main() {
     let mut id = get_req_id_log(REQ_ID_LOG_FILEPATH);
     let socket = Arc::new(UdpSocket::bind(ip).await.expect("Failed to bind to ip"));
     for pic_path in &pic_paths {
-        println!("Started img {}", pic_path);
         let pic_path_without_ext = pic_path.split('.').next().expect("Failed to split on '.'");
 
         // trigger election
