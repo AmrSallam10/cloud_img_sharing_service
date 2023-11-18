@@ -94,6 +94,15 @@ async fn send_init_request_to_cloud(
     }
 }
 
+async fn decode_image(img: ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+
+    for (_, _, pixel) in img.enumerate_pixels() {
+        out.push(pixel[3]);
+    }
+    out
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = env::args().collect();
@@ -132,8 +141,9 @@ async fn main() {
                 image_buffer.clone(),
                 format!("encoded_output_{pic_path_without_ext}.jpeg"),
             );
-            let decoder = Decoder::new(image_buffer);
-            let secret_bytes = decoder.decode_alpha();
+            // let decoder = Decoder::new(image_buffer);
+            // let secret_bytes = decoder.decode_alpha();
+            let secret_bytes = decode_image(image_buffer).await;
             let _ =
                 tokio::fs::write(format!("secret_{pic_path_without_ext}.jpg"), secret_bytes).await;
 

@@ -22,6 +22,7 @@ use tokio::{net::UdpSocket, sync::Mutex};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use steganography::encoder::Encoder;
+use image::{ImageBuffer, Rgba};
 
 mod fragment;
 use fragment::{BigMessage, Fragment, Image, Msg, Type};
@@ -426,12 +427,37 @@ async fn handle_fragmenets(
     None
 }
 
-async fn encode(data: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
+async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
     let (send, receive) = tokio::sync::oneshot::channel();
     rayon::spawn(move || {
-        println!("[{}] Started encryption. Image size {}", req_id, data.len());
-        let encoder = Encoder::new(&data, default_image);
-        let encoded_image = encoder.encode_alpha();
+        println!("[{}] Started encryption. Image size {}", req_id, secret_bytes.len());
+        // let encoder = Encoder::new(&data, default_image);
+        // let encoded_image = encoder.encode_alpha();
+
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> = default_image.into_rgba8();
+        let (width, height) = img.dimensions();
+        let bytes = width * height;
+
+        if secret_bytes.len() > bytes as usize{
+            panic!("secret_bytes is too large for image size");
+        }
+
+        let mut encoded_image = img.clone();
+
+        for (x, y, pixel) in encoded_image.enumerate_pixels_mut() {        
+            let secret_bytes_index = x + (y * width);
+            
+            if secret_bytes_index < secret_bytes.len() as u32{
+                pixel[3] = secret_bytes[secret_bytes_index as usize];
+            }
+
+            else {
+                // If secret bytes are exhausted, break out of the loop
+                break;
+            }
+
+        }
+
         let image = Image {
             dims: encoded_image.dimensions(),
             data: encoded_image.into_raw(),
@@ -544,7 +570,15 @@ async fn main() {
 
     let mut received_complete_msgs: HashMap<String, BigMessage> = HashMap::new();
     let mut channels_map: HashMap<String, mpsc::Sender<u32>> = HashMap::new();
-    let default_image: DynamicImage = image::open("default_image.png").unwrap();
+
+    //Different def images with different sizes to accomodate different size of secret images
+    let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
+    let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
+    let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
+    let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
+    let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
+    let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    
 
     let h1 = tokio::spawn({
         async move {
@@ -577,7 +611,26 @@ async fn main() {
                                     received_complete_msgs.remove(&req_id);
                                     let (tx, rx) = mpsc::channel(100);
                                     channels_map.insert(req_id.clone(), tx);
-                                    let default_image = default_image.clone();
+
+                                    if data.len() < 450 {
+                                        let default_image = def1.clone();
+                                    }
+                                    else if data.len() < 960000 {
+                                        let default_image = def2.clone();
+                                    }
+                                    else if data.len() < 2700000 {
+                                        let default_image = def3.clone();
+                                    }
+                                    else if data.len() < 4200000 {
+                                        let default_image = def4.clone();
+                                    }
+                                    else if data.len() < 10500000 {
+                                        let default_image = def5.clone();
+                                    }
+                                    else {
+                                        let default_image = def6.clone();
+                                    }
+                                    
                                     tokio::spawn(async move {
                                         handle_encryption(
                                             data,
@@ -585,7 +638,7 @@ async fn main() {
                                             src_addr,
                                             req_id.clone(),
                                             rx,
-                                            default_image.clone(),
+                                            default_image,
                                         )
                                         .await
                                     });
