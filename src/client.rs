@@ -38,6 +38,11 @@ fn get_req_id_log(filepath: &str) -> u32 {
     }
 }
 
+fn save_image_buffer(image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>>, filename: String) {
+    let image = image::DynamicImage::ImageRgba8(image_buffer);
+    image.save(filename).unwrap();
+}
+
 fn get_pic_paths(filepath: &str) -> Vec<String> {
     let contents =
         std_fs::read_to_string(filepath).expect("Should have been able to read the file");
