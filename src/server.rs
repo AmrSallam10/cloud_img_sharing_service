@@ -13,6 +13,7 @@ use image::DynamicImage;
 use rand::Rng;
 use std::cmp::min;
 use std::net::SocketAddr;
+use std::ops::Index;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
 use tokio::sync::mpsc;
@@ -22,6 +23,8 @@ use tokio::{net::UdpSocket, sync::Mutex};
 use image::{ImageBuffer, Rgba};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::thread::sleep as std_sleep;
+use std::time::Duration as std_duration;
 use steganography::encoder::Encoder;
 
 mod fragment;
@@ -348,6 +351,10 @@ async fn handle_elec_request(
             println!("[{}] Handling OK", req_id);
             handle_ok_msg(req_id, stats.to_owned()).await;
         }
+        Type::Fail(fail_time) => {
+            println!("Will fail for {}", fail_time);
+            handle_fail_msg(fail_time, election_socket.clone(), &stats.clone()).await;
+        }
         _ => {}
     }
 }
@@ -451,6 +458,36 @@ async fn handle_fragmenets(
         }
     }
     None
+}
+
+async fn send_fail_msg(socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) {
+    let peer_servres: Vec<(SocketAddr, SocketAddr, SocketAddr)> =
+        stats.lock().await.get_peer_servers();
+
+    let next_server = peer_servres[{
+        let mut rng = rand::thread_rng();
+        rng.gen_range(0..peer_servres.len())
+    } as usize]
+        .1;
+    let fail_msg = Msg {
+        msg_type: Type::Fail(60),
+        sender: socket.local_addr().unwrap(),
+        receiver: next_server,
+        payload: None,
+    };
+
+    let fail_msg = serde_cbor::ser::to_vec(&fail_msg).unwrap();
+    socket
+        .send_to(&fail_msg, next_server.to_string())
+        .await
+        .expect("Failed to send!");
+}
+
+async fn handle_fail_msg(fail_time: u32, socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) {
+    let sleep_time = std_duration::from_secs(fail_time as u64);
+    std_sleep(sleep_time);
+    send_fail_msg(socket, stats).await;
+    println!("Woke Up!");
 }
 
 async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
@@ -575,6 +612,8 @@ async fn main() {
     let ip = args[2].as_str();
     let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
 
+    let init_fail: bool = args.len() == 4;
+
     stats.own_ips = Some((ip_service, ip_elec, ip_send));
     stats.peer_servers = get_peer_servers(SERVERS_FILEPATH, stats.own_ips.unwrap(), mode).await;
     println!("{:?}", stats.peer_servers);
@@ -605,6 +644,10 @@ async fn main() {
     let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
     let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
     let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+
+    if init_fail {
+        send_fail_msg(election_socket.clone(), &stats).await;
+    }
 
     let h1 = tokio::spawn({
         async move {

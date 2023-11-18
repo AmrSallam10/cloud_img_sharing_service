@@ -34,6 +34,7 @@ pub enum Type {
     CoordinatorBrdCast(String),
     Ack(String, u32),
     Fragment(Fragment),
+    Fail(u32),
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Msg {
