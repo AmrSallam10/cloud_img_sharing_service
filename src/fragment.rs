@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 
 pub const BUFFER_SIZE: usize = 32768;
-pub const FRAG_SIZE: usize = 4096;
+pub const FRAG_SIZE: usize = 8000;
 pub const BLOCK_SIZE: usize = 8;
 pub const TIMEOUT_MILLIS: usize = 2000;
 pub const SERVICE_PORT: usize = 8080;
@@ -268,6 +268,38 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                             received_len: (end_idx - st_idx) as u32,
                             received_frags,
                         };
+
+                        if msg.received_len == msg.msg_len
+                            || (msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+                        {
+                            // send ack
+                            let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
+                                / (FRAG_SIZE * BLOCK_SIZE)
+                                - 1;
+                            println!("Sending ACK for block {}", block_id);
+                            let receiver: SocketAddr =
+                                format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
+                                    .parse()
+                                    .unwrap();
+                            let ack = Msg {
+                                msg_type: Type::Ack(frag.msg_id, block_id as u32),
+                                sender: socket.local_addr().unwrap(),
+                                receiver,
+                                payload: None,
+                            };
+
+                            println!("{:?}", ack);
+                            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+                            socket
+                                .send_to(&ack, receiver.to_string())
+                                .await
+                                .expect("Failed to send!");
+                        }
+                        if msg.received_len == msg.msg_len {
+                            println!("Full message is received!");
+                            let msg = msg.to_owned();
+                            return msg.data;
+                        }
 
                         e.insert(msg);
                     } else {

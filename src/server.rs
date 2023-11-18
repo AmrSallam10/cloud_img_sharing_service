@@ -383,6 +383,31 @@ async fn handle_fragmenets(
             received_frags,
         };
 
+        if msg.received_len == msg.msg_len
+            || (msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+        {
+            // send ack
+            let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
+                / (FRAG_SIZE * BLOCK_SIZE)
+                - 1;
+            println!("Sending ACK for block {}", block_id);
+            let ack = Msg {
+                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
+                sender: socket.local_addr().unwrap(),
+                receiver: src_addr,
+                payload: None,
+            };
+
+            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+            socket
+                .send_to(&ack, src_addr.to_string())
+                .await
+                .expect("Failed to send!");
+        }
+        if msg.received_len == msg.msg_len {
+            println!("Full message is received!");
+            return Some(frag.msg_id);
+        }
         e.insert(msg);
     } else {
         // should not be needed since we know key exists

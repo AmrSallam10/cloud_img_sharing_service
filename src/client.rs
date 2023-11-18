@@ -4,6 +4,7 @@ extern crate serde_derive;
 extern crate serde_json;
 use image::{ImageBuffer, Rgba};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
 use steganography::decoder::Decoder;
@@ -116,7 +117,11 @@ async fn main() {
     let mut id = get_req_id_log(REQ_ID_LOG_FILEPATH);
     let socket = Arc::new(UdpSocket::bind(ip).await.expect("Failed to bind to ip"));
     for pic_path in &pic_paths {
-        let pic_path_without_ext = pic_path.split('.').next().expect("Failed to split on '.'");
+        let pic_path = Path::new(pic_path);
+        // let pic_name = pic_path.file_name().unwrap().to_str().unwrap();
+        let pic_without_ext = pic_path.file_stem().unwrap().to_str().unwrap();
+        let pic_path = pic_path.to_str().unwrap();
+        println!("{:?} - {}", pic_path, pic_without_ext);
 
         // trigger election
         if let Some(chosen_server) = send_init_request_to_cloud(socket.clone(), id, mode).await {
@@ -139,13 +144,16 @@ async fn main() {
             .unwrap();
             save_image_buffer(
                 image_buffer.clone(),
-                format!("encoded_output_{pic_path_without_ext}.jpeg"),
+                format!("output/encoded/encoded_output_{pic_without_ext}.jpeg"),
             );
             // let decoder = Decoder::new(image_buffer);
             // let secret_bytes = decoder.decode_alpha();
             let secret_bytes = decode_image(image_buffer).await;
-            let _ =
-                tokio::fs::write(format!("secret_{pic_path_without_ext}.jpg"), secret_bytes).await;
+            let _ = tokio::fs::write(
+                format!("output/decoded/secret_{pic_without_ext}.jpg"),
+                secret_bytes,
+            )
+            .await;
 
             id += 1;
         } else {
