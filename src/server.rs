@@ -31,12 +31,7 @@ use tokio::{fs, runtime};
 
 mod fragment;
 use fragment::{BigMessage, Fragment, Image, Msg, Type};
-
-const BUFFER_SIZE: usize = 32768;
-const FRAG_SIZE: usize = 4096;
-const BLOCK_SIZE: usize = 2;
-const TIMEOUT_MILLIS: usize = 2000;
-
+use fragment::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE, TIMEOUT_MILLIS};
 // struct to hold server states (modify as needed)
 #[derive(Clone)]
 struct ServerStats {
@@ -458,6 +453,24 @@ async fn handle_fragmenets(
     None
 }
 
+async fn encode(data: Vec<u8>, req_id: &str) -> Vec<u8> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    println!("[{}] Started encryption image size {}", req_id, data.len());
+    rayon::spawn(move || {
+        let default_image = image::open("default_image.png").unwrap();
+        let encoder = Encoder::new(&data, default_image);
+        let encoded_image = encoder.encode_alpha();
+        let image = Image {
+            dims: encoded_image.dimensions(),
+            data: encoded_image.into_raw(),
+        };
+        let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
+        let _ = send.send(encoded_bytes);
+    });
+
+    receive.await.expect("Rayon Panicked")
+}
+
 async fn handle_encryption(
     data: Vec<u8>,
     socket: Arc<UdpSocket>,
@@ -465,17 +478,12 @@ async fn handle_encryption(
     req_id: &str,
     rx: mpsc::Receiver<u32>,
 ) {
-    println!("[{}] Started encryption", req_id);
-    let default_image = image::open("default_image.png").unwrap();
-    let encoder = Encoder::new(&data, default_image);
-    let encoded_image = encoder.encode_alpha();
-    let image = Image {
-        dims: encoded_image.dimensions(),
-        data: encoded_image.into_raw(),
-    };
-    println!("[{}] finished encryption", req_id);
-
-    let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
+    let encoded_bytes = encode(data, req_id).await;
+    println!(
+        "[{}] finished encryption, image size is {}",
+        req_id,
+        encoded_bytes.len()
+    );
     fragment::server_send(
         encoded_bytes,
         socket.clone(),

@@ -9,9 +9,9 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 
 pub const BUFFER_SIZE: usize = 32768;
-const FRAG_SIZE: usize = 4096;
-const BLOCK_SIZE: usize = 2;
-const TIMEOUT_MILLIS: usize = 2000;
+pub const FRAG_SIZE: usize = 4096;
+pub const BLOCK_SIZE: usize = 16;
+pub const TIMEOUT_MILLIS: usize = 2000;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fragment {

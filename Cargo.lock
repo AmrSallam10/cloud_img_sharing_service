@@ -413,6 +413,7 @@ dependencies = [
  "image",
  "rand",
  "rand_chacha",
+ "rayon",
  "serde",
  "serde_cbor",
  "serde_derive",
