@@ -118,7 +118,7 @@ async fn main() {
     let socket = Arc::new(UdpSocket::bind(ip).await.expect("Failed to bind to ip"));
     for pic_path in &pic_paths {
         let pic_path = Path::new(pic_path);
-        // let pic_name = pic_path.file_name().unwrap().to_str().unwrap();
+        let pic_with_ext = pic_path.file_name().unwrap().to_str().unwrap();
         let pic_without_ext = pic_path.file_stem().unwrap().to_str().unwrap();
         let pic_path = pic_path.to_str().unwrap();
         println!("{:?} - {}", pic_path, pic_without_ext);
@@ -146,11 +146,9 @@ async fn main() {
                 image_buffer.clone(),
                 format!("output/encoded/encoded_output_{pic_without_ext}.jpeg"),
             );
-            // let decoder = Decoder::new(image_buffer);
-            // let secret_bytes = decoder.decode_alpha();
             let secret_bytes = decode_image(image_buffer).await;
             let _ = tokio::fs::write(
-                format!("output/decoded/secret_{pic_without_ext}.jpg"),
+                format!("output/decoded/secret_{pic_with_ext}"),
                 secret_bytes,
             )
             .await;
