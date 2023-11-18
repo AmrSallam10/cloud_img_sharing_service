@@ -130,7 +130,12 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
 
                 // TODO: Need logic to handle unexpected messages without breaking select!
                 //       Consider checking if conditions in the matching of branch conditions
-                curr_block += 1;
+                if let Type::Ack(msg_id, block_id) = msg.msg_type{
+                        if block_id == curr_block as u32{
+                            curr_block += 1;
+                        }
+                };
+
             }
             _ = &mut sleep => {
                 println!("timeout");
@@ -207,8 +212,10 @@ pub async fn server_send(
 
                 // TODO: Need logic to handle unexpected messages without breaking select!
                 //       Consider checking if conditions in the matching of branch conditions
+            if block_id == curr_block as u32{
                 curr_block += 1;
             }
+        }
             _ = &mut sleep => {
                 println!("timeout");
             }
@@ -279,10 +286,14 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                         let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                             / (FRAG_SIZE * BLOCK_SIZE)
                             - 1;
+                        let receiver: SocketAddr =
+                            format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
+                                .parse()
+                                .unwrap();
                         let ack = Msg {
                             msg_type: Type::Ack(frag.msg_id, block_id as u32),
                             sender: socket.local_addr().unwrap(),
-                            receiver: src_addr,
+                            receiver,
                             payload: None,
                         };
 
@@ -290,7 +301,7 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
                         println!("{:?}", src_addr);
                         let ack = serde_cbor::ser::to_vec(&ack).unwrap();
                         socket
-                            .send_to(&ack, src_addr.to_string())
+                            .send_to(&ack, receiver.to_string())
                             .await
                             .expect("Failed to send!");
                     }
