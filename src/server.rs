@@ -86,7 +86,7 @@ async fn handle_election(
             .with_memory(),
     );
     sys.refresh_cpu();
-    let priority = 100.0 - sys.global_cpu_info().cpu_usage();
+    let priority = 16.0 - sys.load_average().one as f32;
     let mut data = stats.lock().await;
     let own_priority = data
         .running_elections
@@ -206,7 +206,7 @@ async fn send_election_msg(
                 .with_memory(),
         );
         sys.refresh_cpu();
-        let priority = 100.0 - sys.global_cpu_info().cpu_usage();
+        let priority = 16.0 - sys.load_average().one as f32;
         let own_priority = data
             .running_elections
             .entry(req_id.clone())
