@@ -38,7 +38,7 @@ use fragment::{ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_P
 struct ServerStats {
     elections_initiated_by_me: HashSet<String>, // req_id -> (own_p, #anticipated Oks)
     elections_received_oks: HashSet<String>,    // req_id -> #currently received Oks
-    running_elections: HashMap<String, u32>,
+    running_elections: HashMap<String, f32>,
     requests_buffer: HashMap<String, Msg>,
     peer_servers: Vec<(SocketAddr, SocketAddr, SocketAddr)>,
     own_ips: Option<(SocketAddr, SocketAddr, SocketAddr)>,
@@ -73,7 +73,7 @@ async fn send_ok_msg(
 }
 
 async fn handle_election(
-    p: u32,
+    p: f32,
     req_id: String,
     src_addr: std::net::SocketAddr,
     service_socket: Arc<UdpSocket>,
@@ -86,7 +86,7 @@ async fn handle_election(
             .with_memory(),
     );
     sys.refresh_cpu();
-    let priority = 100 - sys.global_cpu_info().cpu_usage() as u32;
+    let priority = 100.0 - sys.global_cpu_info().cpu_usage();
     let mut data = stats.lock().await;
     let own_priority = data
         .running_elections
@@ -206,7 +206,7 @@ async fn send_election_msg(
                 .with_memory(),
         );
         sys.refresh_cpu();
-        let priority = 100 - sys.global_cpu_info().cpu_usage() as u32;
+        let priority = 100.0 - sys.global_cpu_info().cpu_usage();
         let own_priority = data
             .running_elections
             .entry(req_id.clone())

@@ -29,8 +29,8 @@ pub struct Fragment {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Type {
     ClientRequest(u32),
-    ElectionRequest(u32),
-    OKMsg(u32),
+    ElectionRequest(f32),
+    OKMsg(f32),
     CoordinatorBrdCast(String),
     Ack(String, u32),
     Fragment(Fragment),
