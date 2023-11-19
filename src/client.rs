@@ -79,20 +79,23 @@ async fn send_init_request_to_cloud(
     }
 
     // wait for election result (server ip)
-    match socket.recv_from(&mut buffer).await {
-        Ok((_bytes_read, src_addr)) => {
-            // println!("{}", src_addr);
-            let response: &str =
-                std::str::from_utf8(&buffer[.._bytes_read]).expect("Failed to convert to UTF-8");
-            let chosen_server: SocketAddr = response.parse().unwrap();
-            println!("{}", chosen_server);
-            Some(chosen_server)
-        }
-        Err(e) => {
-            eprintln!("Error getting the result of eletion: {}", e);
-            None
+    for _ in 0..5 {
+        match socket.recv_from(&mut buffer).await {
+            Ok((_bytes_read, src_addr)) => {
+                // println!("{}", src_addr);
+                if let Ok(response) =
+                    std::str::from_utf8(&buffer[.._bytes_read]){
+                    let chosen_server: SocketAddr = response.parse().unwrap();
+                    println!("{}", chosen_server);
+                    return Some(chosen_server);
+                } else {continue}
+            }
+            Err(e) => {
+                eprintln!("Error getting the result of eletion: {}", e);
+            }
         }
     }
+    None
 }
 
 async fn decode_image(img: ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<u8> {
