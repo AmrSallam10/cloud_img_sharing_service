@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::thread::sleep as std_sleep;
 use std::time::Duration as std_duration;
 use steganography::encoder::Encoder;
+use sysinfo::{CpuExt, CpuRefreshKind, RefreshKind, System, SystemExt};
 
 mod fragment;
 use fragment::{BigMessage, Fragment, Image, Msg, Type};
@@ -79,14 +80,18 @@ async fn handle_election(
     election_socket: Arc<UdpSocket>,
     stats: Arc<Mutex<ServerStats>>,
 ) {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(),
+    );
+    sys.refresh_cpu();
+    let priority = 100 - sys.global_cpu_info().cpu_usage() as u32;
     let mut data = stats.lock().await;
     let own_priority = data
         .running_elections
         .entry(req_id.clone())
-        .or_insert_with(|| {
-            let mut rng = rand::thread_rng();
-            rng.gen_range(1..1000) as u32
-        })
+        .or_insert(priority)
         .to_owned();
     println!("[{}] Own priority {}", req_id, own_priority);
 
@@ -195,14 +200,17 @@ async fn send_election_msg(
         println!("[{}] Sending Election msgs! - {}", req_id, init_f);
 
         let peer_servers = data.get_peer_servers();
-
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new()
+                .with_cpu(CpuRefreshKind::everything())
+                .with_memory(),
+        );
+        sys.refresh_cpu();
+        let priority = 100 - sys.global_cpu_info().cpu_usage() as u32;
         let own_priority = data
             .running_elections
             .entry(req_id.clone())
-            .or_insert_with(|| {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(1..1000) as u32
-            })
+            .or_insert(priority)
             .to_owned();
 
         if !data.elections_initiated_by_me.contains(&req_id) {
@@ -616,7 +624,6 @@ async fn main() {
     let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
 
     let init_fail: bool = args.len() == 4;
-
     stats.own_ips = Some((ip_service, ip_elec, ip_send));
     stats.peer_servers = get_peer_servers(SERVERS_FILEPATH, stats.own_ips.unwrap(), mode).await;
     println!("{:?}", stats.peer_servers);
