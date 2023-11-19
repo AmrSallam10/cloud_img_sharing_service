@@ -316,7 +316,6 @@ pokemon/hydreigon.png
 pokemon/hypno.png
 pokemon/igglybuff.png
 pokemon/illumise.png
-pokemon/img_names.txt
 pokemon/incineroar.jpg
 pokemon/infernape.png
 pokemon/inkay.png
