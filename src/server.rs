@@ -733,7 +733,9 @@ async fn main() {
             loop {
                 match election_socket.recv_from(&mut election_buffer).await {
                     Ok((bytes_read, src_addr)) => {
-                        if stats.lock().await.down {
+                        if stats.lock().await.down
+                            && stats.lock().await.running_elections.is_empty()
+                        {
                             continue;
                         }
                         let service_socket = Arc::clone(&service_socket2);
