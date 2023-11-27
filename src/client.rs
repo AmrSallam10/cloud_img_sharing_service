@@ -3,6 +3,7 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 use image::{ImageBuffer, Rgba};
+use std::time::{Duration, Instant};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,6 +11,11 @@ use std::{env, fs as std_fs};
 use steganography::decoder::Decoder;
 use tokio::fs;
 use tokio::net::UdpSocket;
+
+use std::io::Write;                                                                                                                                                                  
+use std::io::prelude::*;                                                                                                                                                             
+use std::fs::File;
+
 
 mod fragment;
 use fragment::{Image, Msg, Type};
@@ -145,26 +151,30 @@ async fn main() {
     let pic_paths = get_pic_paths(pic_file_path);
     let mut id = get_req_id_log(REQ_ID_LOG_FILEPATH);
     let socket = Arc::new(UdpSocket::bind(ip).await.expect("Failed to bind to ip"));
+    let mut durations: Vec<f32> = Vec::new();
     for pic_path in &pic_paths {
         let pic_path = Path::new(pic_path);
         let pic_with_ext = pic_path.file_name().unwrap().to_str().unwrap();
         let pic_without_ext = pic_path.file_stem().unwrap().to_str().unwrap();
         let pic_path = pic_path.to_str().unwrap();
+        let contents = fs::read(pic_path).await.unwrap();
         println!("{:?} - {}", pic_path, pic_without_ext);
 
+        let start = Instant::now();
         // trigger election
         if let Some(chosen_server) = send_init_request_to_cloud(socket.clone(), id, mode).await {
             let chosen_server = chosen_server.to_string();
             println!("Sending img to sever {}", chosen_server);
 
             // send the img to be encrypted
-            let contents = fs::read(pic_path).await.unwrap();
             let msg_id = format!("{}:{}", socket.local_addr().unwrap(), id);
             // println!("Message Length {}", contents.len());
             fragment::client_send(contents, socket.clone(), &chosen_server, &msg_id).await;
             println!("Finished sending pic");
             let encoded_bytes = fragment::recieve(socket.clone()).await;
             let encoded_image: Image = serde_cbor::de::from_slice(&encoded_bytes).unwrap();
+            let duration = start.elapsed();
+            durations.push(duration.as_secs_f32());
             let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> = image::ImageBuffer::from_raw(
                 encoded_image.dims.0,
                 encoded_image.dims.1,
@@ -187,6 +197,12 @@ async fn main() {
             println!("Failed to get the election result (server ip)");
         };
     }
+    let file_name = String::from("delays") + &socket.local_addr().unwrap().to_string()[..] +".csv";
+    let mut f = File::create(file_name).expect("Unable to create file");                                                                                                          
+    for i in &durations{                                                                                                                                                                  
+        f.write_all((i.to_string()+"\n").as_bytes()).expect("Unable to write data");                                                                                                                            
+    }
+
     std_fs::write(REQ_ID_LOG_FILEPATH, id.to_string())
         .expect("Failed to write req_id to req_id_log.txt");
 }
