@@ -1,6 +1,10 @@
 use std::io::Write;
 use tokio::io::AsyncBufReadExt;
 
+
+mod client;
+mod fragment;
+
 async fn read_input() -> String {
     let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
     let mut buffer = Vec::new();

@@ -23,9 +23,5 @@ name = "server"
 path = "src/server.rs"
 
 [[bin]]
-name = "client"
-path = "src/client.rs"
-
-[[bin]]
 name = "client_app"
 path = "src/client_app.rs"
