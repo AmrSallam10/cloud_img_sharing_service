@@ -10,13 +10,14 @@ async fn read_input() -> String {
 }
 
 async fn init() {
+    // TODO: call following functions
     // register_in_DS();
     // init middleware ?? (init sockets etc)
 }
 
 async fn main_menu() -> State {
     println!("Welcome! Choose one of the following by typing the number.\
-    \n1. Encrypt\n2. Directory of Service\n3. Edit Access\n4. Quit");
+    \n1. Encrypt\n2. Directory of Service\n3. Edit Access\n4. View Image\n5. Quit");
     loop {
         let choice = read_input().await;
         if choice == "1" {
@@ -26,14 +27,16 @@ async fn main_menu() -> State {
         } else if choice == "3" {
             return State::EditAccess;
         } else if choice == "4" {
+            return State::ViewImage;
+        } else if choice == "5" {
             return State::Quit;
         }
     }
 }
 
 async fn encrypt() -> State {
-    println!("Select images to encrypt either by providing a path to file with image paths.");
     println!("To go back to the main menu enter m.");
+    println!("Select images to encrypt either by providing a path to file with image paths.");
     loop {
         print!("Enter a valid path: ");
         _ = std::io::stdout().flush();
@@ -41,6 +44,8 @@ async fn encrypt() -> State {
         if input == "m" {
             return State::MainMenu;
         } else {
+            // TODO: call encryption functionality
+            // maybe we can spawn a thread for this work to keep the program interactive
             // encrypt_from_file();
         }
     }
@@ -51,6 +56,7 @@ async fn directory_of_service() -> State {
     println!("Find below the list of active users. \
     Use the index of the user to see their available images.");
     
+    // TODO: Show list of users by getting ds from server
     // show_users().await;
 
     let users_num = 5;
@@ -76,9 +82,10 @@ async fn directory_of_service() -> State {
 }
 
 async fn choose_image(user_id: String) -> State {
-    // get image from user_id and show it
-    // request_low_res_images(user_id);
     println!("To go back to the main menu enter m.");
+
+    // TODO: given a user id, request the low resolution images
+    // request_low_res_images(user_id);
     loop {
         print!("Enter the image id: ");
         _ = std::io::stdout().flush();
@@ -92,6 +99,7 @@ async fn choose_image(user_id: String) -> State {
             Ok(num) => num,
             Err(_) => continue,
         };
+        // TODO: request image to be viewed
         // image = request_image(image_id, req_views);
         // view_image(image);
     }
@@ -119,8 +127,66 @@ async fn edit_access() -> State {
                 if action.is_none() {
                     return State::MainMenu;
                 } else {
+                    // TODO: try to update access if failed send to server
                     // commit_action(action); // no need for await here
                 }                
+            }
+        }
+    }
+}
+
+async fn view_image() -> State {
+    println!("To go back to the main menu enter m.");
+    println!("In front of you is a list images you have access to. Use image index to select the image you wish to see.");
+    let images_num = 5;
+    loop {
+        print!("Enter a valid index: ");
+        _ = std::io::stdout().flush();
+        let input = read_input().await;
+        if input == "m" {
+            return State::MainMenu;
+        } else {
+            let idx: u32 = match input.parse() {
+                Ok(num) => num,
+                Err(_) => continue,
+            };
+            if idx > images_num || idx < 1 {
+                continue;
+            } else {
+                // TODO: show image on a pop up if user still can access
+                let can_access = false;
+                if can_access {
+                // show_image(idx).await; 
+                } else {
+                    println!("You exceeded the number of allowed access.\n");
+                    loop {
+                        print!("Request more views (y/n)? ");
+                        _ = std::io::stdout().flush();
+                        let input = read_input().await;
+                        if input == "m" {
+                            return State::MainMenu;
+                        } else if input == "n" {
+                            return State::ViewImage;
+                        } else if input == "y" {
+                            loop {
+                                print!("Enter the number of accesses: ");
+                                _ = std::io::stdout().flush();
+                                let input = read_input().await;
+                                if input == "m" {return State::MainMenu}
+                                else {
+                                    let val: u32 = match input.parse() {
+                                        Ok(num) => num,
+                                        Err(_) => continue,
+                                    };
+                                    // TODO: Make a request for the client
+                                    // request_extra_views(image_id, val);
+                                    return State::ViewImage;
+                                }
+                            }
+
+                        }
+                    }
+                }            
             }
         }
     }
@@ -164,6 +230,7 @@ async fn get_action() -> Option<Action> {
     }
 }
 async fn quit() {
+    // TODO: leave dir of service
     // unregister_in_DS();
     // save important data struct
 }
@@ -172,6 +239,7 @@ enum State {
     Encryption,
     DS,
     ChooseImage(String), // user id???
+    ViewImage,
     EditAccess,
     Quit,
 }
@@ -203,6 +271,9 @@ async fn main() {
             State::EditAccess => {
                 state = edit_access().await;
             },
+            State::ViewImage => {
+                state = view_image().await;
+            }
             State::Quit => {
                 quit().await;
                 break;
