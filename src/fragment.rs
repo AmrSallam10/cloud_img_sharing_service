@@ -35,6 +35,9 @@ pub enum Type {
     Ack(String, u32),
     Fragment(Fragment),
     Fail(u32),
+    ImageRequest(String, u32),
+    ShareImage(String, Image, u32),
+    UpdateAccess(String, u32),
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Msg {
@@ -43,6 +46,7 @@ pub struct Msg {
     pub msg_type: Type,
     pub payload: Option<String>,
 }
+
 
 #[derive(Debug, Clone)]
 pub struct BigMessage {
@@ -63,7 +67,7 @@ impl BigMessage {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Image {
     pub dims: (u32, u32),
     pub data: Vec<u8>,
