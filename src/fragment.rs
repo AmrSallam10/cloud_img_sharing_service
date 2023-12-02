@@ -1,3 +1,12 @@
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    clippy::redundant_allocation,
+    unused_assignments
+)]
+
+use crate::commons::{Msg, Type, BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE, TIMEOUT_MILLIS};
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -8,15 +17,6 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 
-pub const BUFFER_SIZE: usize = 32768;
-pub const FRAG_SIZE: usize = 8000;
-pub const BLOCK_SIZE: usize = 8;
-pub const TIMEOUT_MILLIS: usize = 2000;
-pub const SERVICE_PORT: usize = 8080;
-pub const ELECTION_PORT: usize = 8081;
-pub const SERVICE_SENDBACK_PORT: usize = 8082;
-pub const SERVERS_FILEPATH: &str = "./servers.txt";
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fragment {
     pub msg_id: String,
@@ -25,28 +25,6 @@ pub struct Fragment {
     pub msg_len: u32, // as bytes
     pub data: Vec<u8>,
 }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Type {
-    ClientRequest(u32),
-    ElectionRequest(f32),
-    OKMsg(f32),
-    CoordinatorBrdCast(String),
-    Ack(String, u32),
-    Fragment(Fragment),
-    Fail(u32),
-    ImageRequest(String, u32),
-    ShareImage(String, Image, u32),
-    UpdateAccess(String, u32),
-}
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Msg {
-    pub sender: SocketAddr,
-    pub receiver: SocketAddr,
-    pub msg_type: Type,
-    pub payload: Option<String>,
-}
-
 
 #[derive(Debug, Clone)]
 pub struct BigMessage {
@@ -57,8 +35,8 @@ pub struct BigMessage {
 }
 
 impl BigMessage {
-    pub fn default_msg() -> Self {
-        Self {
+    pub fn default_msg() -> BigMessage {
+        BigMessage {
             data: vec![0; 0],
             msg_len: 0,
             received_len: 0,
@@ -229,7 +207,7 @@ pub async fn server_send(
     }
 }
 
-pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
+pub async fn client_receive(socket: Arc<UdpSocket>) -> Vec<u8> {
     let mut buffer = [0; BUFFER_SIZE];
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
@@ -363,4 +341,105 @@ pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
             }
         }
     }
+}
+
+pub async fn server_receive(
+    socket: Arc<UdpSocket>,
+    frag: Fragment,
+    src_addr: std::net::SocketAddr,
+    map: &mut HashMap<String, BigMessage>,
+) -> Option<String> {
+    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+    let mut new_frag = false;
+
+    let st_idx = FRAG_SIZE * (frag.frag_id as usize);
+    let end_idx = min(
+        FRAG_SIZE * (frag.frag_id + 1) as usize,
+        frag.msg_len as usize,
+    );
+
+    // if this is the first fragment create a new entry in the map
+    if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone()) {
+        let mut msg_data = vec![0; frag.msg_len as usize];
+        println!("{}", frag.msg_id);
+        msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+        let mut received_frags = HashSet::new();
+        received_frags.insert(frag.frag_id);
+
+        let msg = BigMessage {
+            data: msg_data,
+            msg_len: frag.msg_len,
+            received_len: (end_idx - st_idx) as u32,
+            received_frags,
+        };
+
+        if msg.received_len == msg.msg_len
+            || (msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
+        {
+            // send ack
+            let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
+                / (FRAG_SIZE * BLOCK_SIZE)
+                - 1;
+            println!("Sending ACK for block {}", block_id);
+            let ack = Msg {
+                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
+                sender: socket.local_addr().unwrap(),
+                receiver: src_addr,
+                payload: None,
+            };
+
+            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+            socket
+                .send_to(&ack, src_addr.to_string())
+                .await
+                .expect("Failed to send!");
+        }
+        if msg.received_len == msg.msg_len {
+            println!("Full message is received!");
+            e.insert(msg);
+            return Some(frag.msg_id);
+        }
+        e.insert(msg);
+    } else {
+        // should not be needed since we know key exists
+        let _default_msg = BigMessage::default_msg();
+        let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
+
+        if !(big_msg.received_frags.contains(&frag.frag_id)) {
+            big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
+
+            big_msg.received_len += (end_idx - st_idx) as u32;
+            big_msg.received_frags.insert(frag.frag_id);
+            new_frag = true;
+        }
+
+        if new_frag
+            && (big_msg.received_len == big_msg.msg_len
+                || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
+        {
+            // send ack
+            let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
+                / (FRAG_SIZE * BLOCK_SIZE)
+                - 1;
+            println!("Sending ACK for block {}", block_id);
+            let ack = Msg {
+                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
+                sender: socket.local_addr().unwrap(),
+                receiver: src_addr,
+                payload: None,
+            };
+
+            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
+            socket
+                .send_to(&ack, src_addr.to_string())
+                .await
+                .expect("Failed to send!");
+        }
+        if new_frag && big_msg.received_len == big_msg.msg_len {
+            println!("Full message is received!");
+            return Some(frag.msg_id);
+        }
+    }
+    None
 }

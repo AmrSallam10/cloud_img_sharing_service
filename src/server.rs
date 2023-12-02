@@ -11,29 +11,29 @@ extern crate serde_derive;
 extern crate serde_json;
 use image::DynamicImage;
 use rand::Rng;
-use std::cmp::min;
+use std::env;
 use std::net::SocketAddr;
-use std::ops::Index;
 use std::sync::Arc;
-use std::{env, fs as std_fs};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio::{net::UdpSocket, sync::Mutex};
 
-use image::{ImageBuffer, Rgba};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::thread::sleep as std_sleep;
-use std::time::Duration as std_duration;
-use steganography::encoder::Encoder;
+
 use sysinfo::{CpuExt, CpuRefreshKind, RefreshKind, System, SystemExt};
 
+mod dir_of_service;
+use dir_of_service::ServerDirOfService;
+mod commons;
+use commons::BUFFER_SIZE;
+use commons::SERVERS_FILEPATH;
+use commons::{Msg, Type};
 mod fragment;
-use fragment::{BigMessage, Fragment, Image, Msg, Type};
-use fragment::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE};
-use fragment::{ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_PORT};
+use fragment::BigMessage;
+mod encryption;
+mod utils;
 
-// struct to hold server states (modify as needed)
 #[derive(Clone)]
 struct ServerStats {
     elections_initiated_by_me: HashSet<String>, // req_id -> (own_p, #anticipated Oks)
@@ -65,11 +65,9 @@ async fn send_ok_msg(
         msg_type: Type::OKMsg(own_priority),
         payload: Some(req_id.clone()),
     };
-    let serialized_msg = serde_json::to_string(&msg).unwrap();
-    socket
-        .send_to(serialized_msg.as_bytes(), src_addr)
-        .await
-        .unwrap();
+    // let serialized_msg = serde_json::to_string(&msg).unwrap();
+    let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+    socket.send_to(&serialized_msg, src_addr).await.unwrap();
 }
 
 async fn handle_election(
@@ -179,11 +177,9 @@ async fn broadcast_coordinator(
             msg_type: Type::CoordinatorBrdCast(leader.clone()),
             payload: Some(req_id.clone()),
         };
-        let serialized_msg = serde_json::to_string(&msg).unwrap();
-        socket
-            .send_to(serialized_msg.as_bytes(), server.1)
-            .await
-            .unwrap();
+        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+        // serde_json::to_string(&msg).unwrap();
+        socket.send_to(&serialized_msg, server.1).await.unwrap();
     }
 }
 
@@ -226,9 +222,10 @@ async fn send_election_msg(
                 msg_type: Type::ElectionRequest(own_priority),
                 payload: Some(req_id.clone()),
             };
-            let serialized_msg = serde_json::to_string(&msg).unwrap();
+            let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+            // serde_json::to_string(&msg).unwrap();
             election_socket
-                .send_to(serialized_msg.as_bytes(), server.1)
+                .send_to(&serialized_msg, server.1)
                 .await
                 .unwrap();
         }
@@ -318,13 +315,20 @@ async fn handle_elec_request(
     service_socket: Arc<UdpSocket>,
     election_socket: Arc<UdpSocket>,
     stats: &Arc<Mutex<ServerStats>>,
+    dir_of_service: Arc<Mutex<ServerDirOfService>>,
 ) {
-    let request: &str = std::str::from_utf8(buffer).expect("Failed to convert to UTF-8");
-    let msg: Msg = match serde_json::from_str(request) {
+    // let request: &str = std::str::from_utf8(buffer).expect("Failed to convert to UTF-8");
+    // let msg: Msg = match serde_json::from_str(request) {
+    //     Ok(msg) => msg,
+    //     Err(_) => return,
+    // };
+
+    let msg: Msg = match serde_cbor::de::from_slice(buffer) {
         Ok(msg) => msg,
-        Err(_) => return,
+        Err(e) => return,
     };
-    println!("Received message :\n{}", request);
+
+    println!("{:?}", msg);
 
     match msg.msg_type {
         Type::ClientRequest(req_id) => {
@@ -364,109 +368,15 @@ async fn handle_elec_request(
             println!("Will fail for {}", fail_time);
             handle_fail_msg(fail_time, election_socket.clone(), &stats.clone()).await;
         }
+        Type::DirOfServQuery => {
+            dir_of_service
+                .lock()
+                .await
+                .query_reply(service_socket.clone(), src_addr)
+                .await;
+        }
         _ => {}
     }
-}
-
-async fn handle_fragmenets(
-    socket: Arc<UdpSocket>,
-    frag: Fragment,
-    src_addr: std::net::SocketAddr,
-    map: &mut HashMap<String, BigMessage>,
-) -> Option<String> {
-    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
-    let mut new_frag = false;
-
-    let st_idx = FRAG_SIZE * (frag.frag_id as usize);
-    let end_idx = min(
-        FRAG_SIZE * (frag.frag_id + 1) as usize,
-        frag.msg_len as usize,
-    );
-
-    // if this is the first fragment create a new entry in the map
-    if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone()) {
-        let mut msg_data = vec![0; frag.msg_len as usize];
-        println!("{}", frag.msg_id);
-        msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
-
-        let mut received_frags = HashSet::new();
-        received_frags.insert(frag.frag_id);
-
-        let msg = BigMessage {
-            data: msg_data,
-            msg_len: frag.msg_len,
-            received_len: (end_idx - st_idx) as u32,
-            received_frags,
-        };
-
-        if msg.received_len == msg.msg_len
-            || (msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0
-        {
-            // send ack
-            let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
-                / (FRAG_SIZE * BLOCK_SIZE)
-                - 1;
-            println!("Sending ACK for block {}", block_id);
-            let ack = Msg {
-                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
-                sender: socket.local_addr().unwrap(),
-                receiver: src_addr,
-                payload: None,
-            };
-
-            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
-            socket
-                .send_to(&ack, src_addr.to_string())
-                .await
-                .expect("Failed to send!");
-        }
-        if msg.received_len == msg.msg_len {
-            println!("Full message is received!");
-            e.insert(msg);
-            return Some(frag.msg_id);
-        }
-        e.insert(msg);
-    } else {
-        // should not be needed since we know key exists
-        let _default_msg = BigMessage::default_msg();
-        let big_msg = map.entry(frag.msg_id.clone()).or_insert(_default_msg);
-
-        if !(big_msg.received_frags.contains(&frag.frag_id)) {
-            big_msg.data[st_idx..end_idx].copy_from_slice(&frag.data);
-
-            big_msg.received_len += (end_idx - st_idx) as u32;
-            big_msg.received_frags.insert(frag.frag_id);
-            new_frag = true;
-        }
-
-        if new_frag
-            && (big_msg.received_len == big_msg.msg_len
-                || (big_msg.received_len as usize / FRAG_SIZE) % BLOCK_SIZE == 0)
-        {
-            // send ack
-            let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
-                / (FRAG_SIZE * BLOCK_SIZE)
-                - 1;
-            println!("Sending ACK for block {}", block_id);
-            let ack = Msg {
-                msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
-                sender: socket.local_addr().unwrap(),
-                receiver: src_addr,
-                payload: None,
-            };
-
-            let ack = serde_cbor::ser::to_vec(&ack).unwrap();
-            socket
-                .send_to(&ack, src_addr.to_string())
-                .await
-                .expect("Failed to send!");
-        }
-        if new_frag && big_msg.received_len == big_msg.msg_len {
-            println!("Full message is received!");
-            return Some(frag.msg_id);
-        }
-    }
-    None
 }
 
 async fn send_fail_msg(socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) {
@@ -485,9 +395,10 @@ async fn send_fail_msg(socket: Arc<UdpSocket>, stats: &Arc<Mutex<ServerStats>>) 
         payload: None,
     };
 
-    let fail_msg = serde_json::to_string(&fail_msg).unwrap();
+    let fail_msg = serde_cbor::ser::to_vec(&fail_msg).unwrap();
+    // serde_json::to_string(&fail_msg).unwrap();
     socket
-        .send_to(fail_msg.as_bytes(), next_server.to_string())
+        .send_to(&fail_msg, next_server.to_string())
         .await
         .expect("Failed to send!");
 }
@@ -501,49 +412,6 @@ async fn handle_fail_msg(fail_time: u32, socket: Arc<UdpSocket>, stats: &Arc<Mut
     send_fail_msg(socket, stats).await;
 }
 
-async fn encode(secret_bytes: Vec<u8>, req_id: String, default_image: DynamicImage) -> Vec<u8> {
-    let (send, receive) = tokio::sync::oneshot::channel();
-    rayon::spawn(move || {
-        println!(
-            "[{}] Started encryption. Image size {}",
-            req_id,
-            secret_bytes.len()
-        );
-        // let encoder = Encoder::new(&data, default_image);
-        // let encoded_image = encoder.encode_alpha();
-
-        let img: ImageBuffer<Rgba<u8>, Vec<u8>> = default_image.into_rgba8();
-        let (width, height) = img.dimensions();
-        let bytes = width * height;
-
-        if secret_bytes.len() > bytes as usize {
-            panic!("secret_bytes is too large for image size");
-        }
-
-        let mut encoded_image = img.clone();
-
-        for (x, y, pixel) in encoded_image.enumerate_pixels_mut() {
-            let secret_bytes_index = x + (y * width);
-
-            if secret_bytes_index < secret_bytes.len() as u32 {
-                pixel[3] = secret_bytes[secret_bytes_index as usize];
-            } else {
-                // If secret bytes are exhausted, break out of the loop
-                break;
-            }
-        }
-
-        let image = Image {
-            dims: encoded_image.dimensions(),
-            data: encoded_image.into_raw(),
-        };
-        let encoded_bytes = serde_cbor::to_vec(&image).unwrap();
-        let _ = send.send(encoded_bytes);
-    });
-
-    receive.await.expect("Rayon Panicked [encrption]")
-}
-
 async fn handle_encryption(
     data: Vec<u8>,
     socket: Arc<UdpSocket>,
@@ -552,7 +420,7 @@ async fn handle_encryption(
     rx: mpsc::Receiver<u32>,
     default_image: DynamicImage,
 ) {
-    let encoded_bytes = encode(data, req_id.clone(), default_image).await;
+    let encoded_bytes = encryption::encode_img(data, req_id.clone(), default_image).await;
     println!(
         "[{}] finished encryption, image size is {}",
         req_id,
@@ -568,52 +436,7 @@ async fn handle_encryption(
     .await;
 }
 
-async fn get_peer_servers(
-    filepath: &str,
-    own_ips: (SocketAddr, SocketAddr, SocketAddr),
-    mode: &str,
-) -> Vec<(SocketAddr, SocketAddr, SocketAddr)> {
-    let mut servers = Vec::<(SocketAddr, SocketAddr, SocketAddr)>::new();
-    let contents =
-        std_fs::read_to_string(filepath).expect("Should have been able to read the file");
-    for ip in contents.lines() {
-        let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
-        if own_ips.0 != ip_service {
-            servers.push((ip_service, ip_elec, ip_send));
-        }
-    }
-    servers
-}
-
-async fn get_ips(ip: &str, mode: &str) -> (SocketAddr, SocketAddr, SocketAddr) {
-    let (ip_service, ip_elec, ip_send): (SocketAddr, SocketAddr, SocketAddr) = match mode {
-        "local" => {
-            // In local mode, assume the provided IP includes the port number
-            let ip_elec: SocketAddr = ip.parse().expect("Failed to parse ip");
-            let ip_service = SocketAddr::new(ip_elec.ip(), ip_elec.port() - 1);
-            let ip_send = SocketAddr::new(ip_elec.ip(), ip_elec.port() + 1);
-            (ip_service, ip_elec, ip_send)
-        }
-        "dist" => {
-            // In distributed mode, no port number, defined by CONSTS
-            let ip_service: SocketAddr = format!("{}:{}", ip, SERVICE_PORT)
-                .parse()
-                .expect("Failed to parse ip");
-            let ip_elec: SocketAddr = format!("{}:{}", ip, ELECTION_PORT)
-                .parse()
-                .expect("Failed to parse ip");
-            let ip_send: SocketAddr = format!("{}:{}", ip, SERVICE_SENDBACK_PORT)
-                .parse()
-                .expect("Failed to parse ip");
-            (ip_service, ip_elec, ip_send)
-        }
-        _ => {
-            eprintln!("Invalid mode. Use 'local' or 'distributed'.");
-            std::process::exit(1);
-        }
-    };
-    (ip_service, ip_elec, ip_send)
-}
+async fn startup() {}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
@@ -621,11 +444,12 @@ async fn main() {
     let args: Vec<_> = env::args().collect();
     let mode = args[1].as_str();
     let ip = args[2].as_str();
-    let (ip_service, ip_elec, ip_send) = get_ips(ip, mode).await;
+    let (ip_service, ip_elec, ip_send) = utils::get_ips(ip, mode).await;
 
     let init_fail: bool = args.len() == 4;
     stats.own_ips = Some((ip_service, ip_elec, ip_send));
-    stats.peer_servers = get_peer_servers(SERVERS_FILEPATH, stats.own_ips.unwrap(), mode).await;
+    stats.peer_servers =
+        utils::get_peer_servers(SERVERS_FILEPATH, stats.own_ips.unwrap(), mode).await;
     println!("{:?}", stats.peer_servers);
 
     let service_socket = Arc::new(UdpSocket::bind(ip_service).await.unwrap());
@@ -638,6 +462,8 @@ async fn main() {
     let send_socket = Arc::new(UdpSocket::bind(ip_send).await.unwrap());
     println!("Server (send back) on {ip_send}");
 
+    let dir_of_service = Arc::new(Mutex::new(ServerDirOfService::new()));
+    let dir_of_service2 = Arc::clone(&dir_of_service);
     let stats = Arc::new(Mutex::new(stats));
     let stats_election = Arc::clone(&stats);
 
@@ -649,15 +475,21 @@ async fn main() {
 
     //Different def images with different sizes to accomodate different size of secret images
     let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
-    let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
-    let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
-    let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
-    let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
-    let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    // let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
+    // let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
+    // let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
+    // let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
+    // let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
 
     if init_fail {
         send_fail_msg(election_socket.clone(), &stats).await;
     }
+
+    ServerDirOfService::query(
+        service_socket.clone(),
+        stats.lock().await.peer_servers.clone(),
+    )
+    .await;
 
     let h1 = tokio::spawn({
         async move {
@@ -674,7 +506,7 @@ async fn main() {
                                 let service_socket = service_socket.clone();
                                 let send_socket = send_socket.clone();
 
-                                if let Some(req_id) = handle_fragmenets(
+                                if let Some(req_id) = fragment::server_receive(
                                     service_socket.clone(),
                                     frag,
                                     src_addr,
@@ -693,14 +525,16 @@ async fn main() {
 
                                     println!("{}", data.len());
 
-                                    let default_image = match data.len() {
-                                        len if len > 9100000 => def6.clone(),
-                                        len if len > 3000000 => def5.clone(),
-                                        len if len > 2100000 => def4.clone(),
-                                        len if len > 670000 => def3.clone(),
-                                        len if len > 350000 => def2.clone(),
-                                        _ => def1.clone(),
-                                    };
+                                    let default_image = def1.clone();
+
+                                    // let default_image = match data.len() {
+                                    //     len if len > 9100000 => def6.clone(),
+                                    //     len if len > 3000000 => def5.clone(),
+                                    //     len if len > 2100000 => def4.clone(),
+                                    //     len if len > 670000 => def3.clone(),
+                                    //     len if len > 350000 => def2.clone(),
+                                    //     _ => def1.clone(),
+                                    // };
 
                                     tokio::spawn(async move {
                                         handle_encryption(
@@ -723,6 +557,23 @@ async fn main() {
                                     .send(block_id)
                                     .await
                                     .unwrap()
+                            }
+                            Type::DirOfServQuery => {
+                                dir_of_service
+                                    .lock()
+                                    .await
+                                    .query_reply(service_socket.clone(), src_addr)
+                                    .await;
+                            }
+                            Type::DirOfServJoin => {
+                                dir_of_service.lock().await.client_join(src_addr).await;
+                            }
+                            Type::DirOfServLeave => {
+                                dir_of_service.lock().await.client_leave(src_addr).await;
+                            }
+
+                            Type::DirOfServQueryReply(d) => {
+                                dir_of_service.lock().await.update(d).await
                             }
                             _ => {}
                         }
@@ -748,6 +599,7 @@ async fn main() {
                         let service_socket = Arc::clone(&service_socket2);
                         let election_socket = Arc::clone(&election_socket);
                         let stats_clone = Arc::clone(&stats_election);
+                        let dir_of_service_clone = Arc::clone(&dir_of_service2);
                         tokio::spawn(async move {
                             handle_elec_request(
                                 &election_buffer[..bytes_read],
@@ -755,6 +607,7 @@ async fn main() {
                                 service_socket,
                                 election_socket,
                                 &stats_clone,
+                                dir_of_service_clone,
                             )
                             .await;
                         });
