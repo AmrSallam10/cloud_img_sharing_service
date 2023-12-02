@@ -1,2 +1,2 @@
-pic1.jpg
-pic2.jpg
+pics/pic1.jpg
+pics/pic2.jpg

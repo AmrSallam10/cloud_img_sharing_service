@@ -13,25 +13,27 @@ use image::DynamicImage;
 use rand::Rng;
 use std::cmp::min;
 use std::net::SocketAddr;
-use std::ops::Index;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
-use tokio::{net::UdpSocket, sync::Mutex};
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex, RwLock},
+};
 
 use image::{ImageBuffer, Rgba};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::thread::sleep as std_sleep;
-use std::time::Duration as std_duration;
-use steganography::encoder::Encoder;
 use sysinfo::{CpuExt, CpuRefreshKind, RefreshKind, System, SystemExt};
 
+mod directory_of_service;
+use directory_of_service::ServerDirOfService;
+mod commons;
 mod fragment;
-use fragment::{BigMessage, Fragment, Image, Msg, Type};
-use fragment::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE};
-use fragment::{ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_PORT};
+use commons::{BigMessage, Fragment, Image, Msg, Type};
+use commons::{BLOCK_SIZE, BUFFER_SIZE, FRAG_SIZE};
+use commons::{ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_PORT};
 
 // struct to hold server states (modify as needed)
 #[derive(Clone)]
@@ -638,6 +640,8 @@ async fn main() {
     let send_socket = Arc::new(UdpSocket::bind(ip_send).await.unwrap());
     println!("Server (send back) on {ip_send}");
 
+    let dir_of_service = Mutex::new(ServerDirOfService::new());
+    ServerDirOfService::query(service_socket.clone(), stats.peer_servers.clone()).await;
     let stats = Arc::new(Mutex::new(stats));
     let stats_election = Arc::clone(&stats);
 
@@ -649,11 +653,11 @@ async fn main() {
 
     //Different def images with different sizes to accomodate different size of secret images
     let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
-    let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
-    let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
-    let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
-    let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
-    let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    // let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
+    // let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
+    // let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
+    // let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
+    // let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
 
     if init_fail {
         send_fail_msg(election_socket.clone(), &stats).await;
@@ -692,15 +696,16 @@ async fn main() {
                                     channels_map.insert(req_id.clone(), tx);
 
                                     println!("{}", data.len());
+                                    let default_image = def1.clone();
 
-                                    let default_image = match data.len() {
-                                        len if len > 9100000 => def6.clone(),
-                                        len if len > 3000000 => def5.clone(),
-                                        len if len > 2100000 => def4.clone(),
-                                        len if len > 670000 => def3.clone(),
-                                        len if len > 350000 => def2.clone(),
-                                        _ => def1.clone(),
-                                    };
+                                    // let default_image = match data.len() {
+                                    //     len if len > 9100000 => def6.clone(),
+                                    //     len if len > 3000000 => def5.clone(),
+                                    //     len if len > 2100000 => def4.clone(),
+                                    //     len if len > 670000 => def3.clone(),
+                                    //     len if len > 350000 => def2.clone(),
+                                    //     _ => def1.clone(),
+                                    // };
 
                                     tokio::spawn(async move {
                                         handle_encryption(
@@ -723,6 +728,23 @@ async fn main() {
                                     .send(block_id)
                                     .await
                                     .unwrap()
+                            }
+                            Type::DirOfServQuery => {
+                                dir_of_service
+                                    .lock()
+                                    .await
+                                    .query_reply(service_socket.clone(), src_addr)
+                                    .await;
+                            }
+                            Type::DirOfServJoin => {
+                                dir_of_service.lock().await.client_join(src_addr).await;
+                            }
+                            Type::DirOfServLeave => {
+                                dir_of_service.lock().await.client_leave(src_addr).await;
+                            }
+
+                            Type::DirOfServQueryReply(d) => {
+                                dir_of_service.lock().await.update(d).await
                             }
                             _ => {}
                         }
