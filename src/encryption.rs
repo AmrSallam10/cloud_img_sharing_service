@@ -1,4 +1,4 @@
-use image::{DynamicImage, ImageBuffer, Rgba};
+use image::{open, DynamicImage, ImageBuffer, Rgba};
 
 use crate::fragment::Image;
 

@@ -475,11 +475,11 @@ async fn main() {
 
     //Different def images with different sizes to accomodate different size of secret images
     let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
-    // let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
-    // let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
-    // let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
-    // let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
-    // let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
+    let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
+    let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
+    let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
+    let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
 
     if init_fail {
         send_fail_msg(election_socket.clone(), &stats).await;
@@ -506,7 +506,7 @@ async fn main() {
                                 let service_socket = service_socket.clone();
                                 let send_socket = send_socket.clone();
 
-                                if let Some(req_id) = fragment::server_receive(
+                                if let Some(req_id) = fragment::receive_one(
                                     service_socket.clone(),
                                     frag,
                                     src_addr,
@@ -525,16 +525,16 @@ async fn main() {
 
                                     println!("{}", data.len());
 
-                                    let default_image = def1.clone();
+                                    // let default_image = def1.clone();
 
-                                    // let default_image = match data.len() {
-                                    //     len if len > 9100000 => def6.clone(),
-                                    //     len if len > 3000000 => def5.clone(),
-                                    //     len if len > 2100000 => def4.clone(),
-                                    //     len if len > 670000 => def3.clone(),
-                                    //     len if len > 350000 => def2.clone(),
-                                    //     _ => def1.clone(),
-                                    // };
+                                    let default_image = match data.len() {
+                                        len if len > 9100000 => def6.clone(),
+                                        len if len > 3000000 => def5.clone(),
+                                        len if len > 2100000 => def4.clone(),
+                                        len if len > 670000 => def3.clone(),
+                                        len if len > 350000 => def2.clone(),
+                                        _ => def1.clone(),
+                                    };
 
                                     tokio::spawn(async move {
                                         handle_encryption(

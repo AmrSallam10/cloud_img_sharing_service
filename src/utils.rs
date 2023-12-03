@@ -1,4 +1,5 @@
 use crate::commons::{ELECTION_PORT, SERVICE_PORT, SERVICE_SENDBACK_PORT};
+use crate::commons::{ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH};
 use std::{fs, net::SocketAddr};
 
 pub async fn get_peer_servers(
@@ -83,31 +84,30 @@ pub fn get_cloud_servers(filepath: &str, mode: &str) -> Vec<(SocketAddr, SocketA
 }
 
 pub fn create_output_dirs() {
-    let base_directory = "output";
-    let encoded_directory = "output/encoded";
-    let decoded_directory = "output/decoded";
+    let base_directory = PICS_ROOT_PATH;
+    // let high_res_directory = format!("{}/{}", PICS_ROOT_PATH, HIGH_RES_PICS_PATH);
+    // let low_res_directory = format!("{}/{}", PICS_ROOT_PATH, LOW_RES_PICS_PATH);
+    // let encrypted_directory = format!("{}/{}", PICS_ROOT_PATH, ENCRYPTED_PICS_PATH);
 
     // Attempt to create the entire directory structure
-    if let Err(err) = fs::create_dir_all(encoded_directory) {
+    if let Err(err) = fs::create_dir_all(ENCRYPTED_PICS_PATH) {
         if err.kind() == std::io::ErrorKind::AlreadyExists {
-            println!("Directory '{}' already exists.", encoded_directory);
+            println!("Directory '{}' already exists.", ENCRYPTED_PICS_PATH);
         } else {
             println!(
                 "Error creating directory '{}': {:?}",
-                encoded_directory, err
+                ENCRYPTED_PICS_PATH, err
             );
-            return; // Abo  rt if an error occurs
         }
     }
+}
 
-    if let Err(err) = fs::create_dir_all(decoded_directory) {
+pub fn mkdir(path: &str) {
+    if let Err(err) = fs::create_dir_all(path) {
         if err.kind() == std::io::ErrorKind::AlreadyExists {
-            println!("Directory '{}' already exists.", decoded_directory);
+            println!("Directory '{}' already exists.", path);
         } else {
-            println!(
-                "Error creating directory '{}': {:?}",
-                decoded_directory, err
-            );
+            println!("Error creating directory '{}': {:?}", path, err);
         }
     }
 }
@@ -116,4 +116,12 @@ pub fn get_pic_paths(filepath: &str) -> Vec<String> {
     let contents = fs::read_to_string(filepath).expect("Should have been able to read the file");
     let pic_paths: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
     pic_paths
+}
+
+pub fn file_exists(file_path: &str) -> bool {
+    if let Ok(metadata) = fs::metadata(file_path) {
+        metadata.is_file()
+    } else {
+        false
+    }
 }

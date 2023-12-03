@@ -136,10 +136,14 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
     loop {
         print!("Enter the image id: ");
         _ = std::io::stdout().flush();
-        let image_id = read_input().await;
-        if image_id == "m" {
+        let img_id = read_input().await;
+        if img_id == "m" {
             return State::MainMenu;
         }
+        let img_id: u32 = match img_id.parse() {
+            Ok(num) => num,
+            Err(_) => continue,
+        };
         print!("Enter the number of requested views: ");
         _ = std::io::stdout().flush();
         let req_views = read_input().await;
@@ -150,6 +154,12 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
             Ok(num) => num,
             Err(_) => continue,
         };
+        backend
+            .lock()
+            .await
+            .send_image_request(img_id, req_views, client_addr)
+            .await;
+        return State::MainMenu;
         // TODO: request image to be viewed
         // image = request_image(image_id, req_views);
         // view_image(image);

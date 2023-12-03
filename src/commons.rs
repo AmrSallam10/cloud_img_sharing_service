@@ -12,6 +12,10 @@ pub const ELECTION_PORT: usize = 8081;
 pub const SERVICE_SENDBACK_PORT: usize = 8082;
 pub const SERVERS_FILEPATH: &str = "./servers.txt";
 pub const REQ_ID_LOG_FILEPATH: &str = "./req_id_log.txt";
+pub const PICS_ROOT_PATH: &str = "./pics";
+pub const HIGH_RES_PICS_PATH: &str = "./pics/high";
+pub const LOW_RES_PICS_PATH: &str = "./pics/low";
+pub const ENCRYPTED_PICS_PATH: &str = "./pics/encrypted";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Msg {
@@ -35,8 +39,8 @@ pub enum Type {
     DirOfServJoin,
     DirOfServLeave,
     LowResImgReq,
-    LowResImgReply,
-    ImageRequest(String, u32),
-    SharedImage(String, Image, u32),
+    LowResImgReply(Fragment),
+    ImageRequest(u32, u32),
+    SharedImage(u32, Image, u32),
     UpdateAccess(String, u32),
 }

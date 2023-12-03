@@ -51,7 +51,13 @@ pub struct Image {
     pub data: Vec<u8>,
 }
 
-pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, msg_id: &str) {
+pub async fn client_send(
+    data: Vec<u8>,
+    socket: Arc<UdpSocket>,
+    address: &str,
+    msg_id: &str,
+    f_low_res: bool,
+) {
     let frag_num = (data.len() + FRAG_SIZE - 1) / FRAG_SIZE; // a shorthand for ceil()
     let block_num = (frag_num + BLOCK_SIZE - 1) / BLOCK_SIZE; // a shorthand for ceil()
     let msg_len = data.len();
@@ -85,7 +91,11 @@ pub async fn client_send(data: Vec<u8>, socket: Arc<UdpSocket>, address: &str, m
             let msg = Msg {
                 sender: socket.local_addr().unwrap(),
                 receiver: SocketAddr::from_str(address).unwrap(),
-                msg_type: Type::Fragment(frag.clone()),
+                msg_type: if f_low_res {
+                    Type::LowResImgReply(frag)
+                } else {
+                    Type::Fragment(frag)
+                },
                 payload: None,
             };
 
@@ -207,7 +217,7 @@ pub async fn server_send(
     }
 }
 
-pub async fn client_receive(socket: Arc<UdpSocket>) -> Vec<u8> {
+pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
     let mut buffer = [0; BUFFER_SIZE];
 
     let mut map: HashMap<String, BigMessage> = HashMap::new();
@@ -343,7 +353,7 @@ pub async fn client_receive(socket: Arc<UdpSocket>) -> Vec<u8> {
     }
 }
 
-pub async fn server_receive(
+pub async fn receive_one(
     socket: Arc<UdpSocket>,
     frag: Fragment,
     src_addr: std::net::SocketAddr,
