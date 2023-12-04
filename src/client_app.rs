@@ -215,9 +215,11 @@ async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
                 continue;
             } else {
                 // TODO: show image on a pop up if user still can access
-                let can_access = false;
+                let can_access = true;
                 if can_access {
                     // show_image(idx).await;
+                    let src_addr: SocketAddr = "127.0.0.1:8091".parse().unwrap();
+                    backend.lock().await.view_image(1, src_addr).await;
                 } else {
                     println!("You exceeded the number of allowed access.\n");
                     loop {

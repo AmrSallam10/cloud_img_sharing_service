@@ -18,7 +18,8 @@ steganography = "1.0.2"
 rayon = "1.8.0"
 sysinfo = "0.29.10"
 gdk-pixbuf = "0.18.3"
-gtk = { git = "https://github.com/gtk-rs/gtk3-rs.git" }
+gtk = { git = "https://github.com/gtk-rs/gtk3-rs.git" } 
+# sudo apt install libgtk-3-dev libgtksourceview-3.0-dev libwebkit2gtk-4.0-dev
 
 [[bin]]
 name = "server"
