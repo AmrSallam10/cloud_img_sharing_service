@@ -341,10 +341,21 @@ impl ClientBackend {
         let path = format!("{}/pic{}.png", ENCRYPTED_PICS_PATH, img_id);
 
         let img_buffer = file_as_image_buffer(path);
+
+        //Embedding the access limit in the image
+        let mut img_buffer_with_access = img_buffer.clone();
+        let (width, height) = img_buffer_with_access.dimensions();
+        let access_pixel = img_buffer_with_access.get_pixel_mut(width - 1, height - 1);
+        access_pixel[3] = requested_access as u8;   //set the alpha channel of the last pixel to the access limit
+
+
         let image = Image {
-            dims: img_buffer.dimensions(),
-            data: img_buffer.into_raw(),
+            dims: img_buffer_with_access.dimensions(),
+            data: img_buffer_with_access.into_raw(),
         };
+
+        
+        
 
         let msg = Msg {
             sender: client_socket.local_addr().unwrap(),
@@ -386,6 +397,7 @@ impl ClientBackend {
         let path_decoded = format!("{}/{}", HIGH_RES_PICS_PATH, src_addr);
         let parts: Vec<&str> = pic_id.split('&').collect();
         let pic_name = *parts.last().unwrap();
+        let pic_without_ext = pic_name.split('.').collect::<Vec<&str>>()[0];
         mkdir(path_encrypted.as_str());
         mkdir(path_decoded.as_str());
 
@@ -396,6 +408,12 @@ impl ClientBackend {
             image_buffer.clone(),
             format!("{}/{}", path_encrypted, pic_name),
         );
+
+        save_image_buffer(
+            image_buffer.clone(),
+            format!("{}/{}.png", path_encrypted, pic_without_ext),
+        );
+
 
         let secret_bytes = decode_img(image_buffer).await;
         let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
