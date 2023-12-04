@@ -338,7 +338,7 @@ impl ClientBackend {
         src_addr: SocketAddr,
     ) {
         println!("Handle Image Request");
-        let path = format!("{}/pic{}.jpg", ENCRYPTED_PICS_PATH, img_id);
+        let path = format!("{}/pic{}.png", ENCRYPTED_PICS_PATH, img_id);
 
         let img_buffer = file_as_image_buffer(path);
         let image = Image {
@@ -516,7 +516,7 @@ impl ClientBackend {
 
                 save_image_buffer(
                     image_buffer.clone(),
-                    format!("{}/{}.jpg", ENCRYPTED_PICS_PATH, pic_without_ext),
+                    format!("{}/{}.png", ENCRYPTED_PICS_PATH, pic_without_ext),
                 );
 
                 // let secret_bytes = decode_img(image_buffer).await;
@@ -547,7 +547,7 @@ fn save_image_buffer(image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>>, filena
 }
 
 fn file_as_image_buffer(filename: String) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    let img = open(Path::new(&filename)).unwrap();
+    let img = open(filename).unwrap();
     img.to_rgba8()
 }
 
