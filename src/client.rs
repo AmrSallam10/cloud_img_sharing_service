@@ -18,6 +18,15 @@ use std::{env, fs as std_fs};
 use steganography::decoder::Decoder;
 use tokio::fs;
 use tokio::net::UdpSocket;
+extern crate gtk;
+extern crate gdk_pixbuf;
+
+use gtk::gdk::ATOM_NONE;
+use gtk::prelude::*;
+use gtk::{Application, ApplicationWindow, Button, ScrolledWindow};
+use gtk::{Label, Window, WindowType, Image as gtkImage};
+use gdk_pixbuf::Pixbuf;
+
 
 use crate::commons::{
     self, ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH,
@@ -417,6 +426,80 @@ impl ClientBackend {
 
         let secret_bytes = decode_img(image_buffer).await;
         let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
+    }
+
+    pub async fn view_image(&self, img_id: u32, src_addr: SocketAddr){
+        let path = format!("{}/pic{}.png", ENCRYPTED_PICS_PATH, img_id);
+        let img_buffer = file_as_image_buffer(path.clone());
+        let (width, height) = img_buffer.dimensions();
+        let access_pixel = img_buffer.get_pixel(width - 1, height - 1);
+        let access = access_pixel[3];
+        println!("Access: {}", access);
+
+        //Check if there is still access to the image
+        if access == 0 {
+            println!("No remaining views for this image");
+            gtk::main_quit();
+        }
+
+        // Initialize GTK
+        gtk::init().expect("Failed to initialize GTK.");
+
+        // Create a new top-level window
+        let window = Window::new(WindowType::Toplevel);
+
+        // Set the title and size of the window
+        let viewer_title = format!("Image from {:?}               Remaining Views: {}", src_addr, access);
+        window.set_title(&viewer_title);
+
+
+        window.set_default_size(width, height);
+
+        // // Create an image and load it from a file
+        // let image_path = format!("{}/pic{}.png", HIGH_RES_PICS_PATH, img_id);
+        // let image = gtkImage::from_file(image_path);
+
+        // Create a Pixbuf from the image data
+        Pixbuf::new_from_mut_slice(
+            img_buffer.into_raw(),
+            gdk_pixbuf::Colorspace::Rgb,
+            true,
+            8,
+            width as i32,
+            height as i32,
+            width as i32 * 4,
+        );
+
+        // Create a GtkImage widget and set its Pixbuf
+         let gtk_image = GtkImage::new_from_pixbuf(Some(&pixbuf));
+
+
+        // Create a button to close the window
+        let button = Button::with_label("Close");
+
+        // Create a vertical box to hold the image and button
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        vbox.pack_start(&gtk_image, false, false, 0);
+        vbox.pack_start(&button, false, false, 0);
+
+        // Connect the button's clicked signal to a callback that closes the window and reduces the remaining views
+        button.connect_clicked(|_| {
+            access_pixel[3] -= 1;
+            save_image_buffer(
+                img_buffer.clone(),
+                path);
+            gtk::main_quit();
+        });
+
+            // Set the window's content to the vertical box
+        window.add(&vbox);
+        window.add(&scrolled_window);
+        // Show all the elements in the window
+        window.show_all();
+
+        // Run the GTK main loop
+        gtk::main();
+
     }
 
     pub async fn request_update_access(
