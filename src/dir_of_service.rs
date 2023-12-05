@@ -77,7 +77,7 @@ impl ClientDirOfService {
 #[derive(Debug)]
 pub struct ServerDirOfService {
     entries: HashMap<SocketAddr, bool>,
-    pending_updates: Mutex<HashMap<SocketAddr, HashMap<SocketAddr, Action>>>,
+    pending_updates: Mutex<HashMap<SocketAddr, HashMap<String, Action>>>,
 }
 
 impl ServerDirOfService {
@@ -95,14 +95,14 @@ impl ServerDirOfService {
     }
 
     pub async fn handle_access_update_req(&mut self, img_id: String, action: Action) {
-        println!("HERE");
+        println!("Handling {} {:?}", img_id, action);
         let img_id_parts: Vec<&str> = img_id.split('&').collect();
         let target_addr = img_id_parts[1].parse::<SocketAddr>().unwrap();
-        let src_addr = img_id_parts[0].parse::<SocketAddr>().unwrap();
+        let src_addr = img_id_parts[0].parse::<SocketAddr>().unwrap().to_string();
         let mut guard = self.pending_updates.lock().await;
         let target_addr_level = guard.entry(target_addr).or_insert(HashMap::new());
-
-        target_addr_level.insert(src_addr, action);
+        let img_id = src_addr + "&" + img_id_parts[2];
+        target_addr_level.insert(img_id, action);
         drop(guard);
 
         println!("{:?}", self.pending_updates.lock().await);
@@ -143,7 +143,7 @@ impl ServerDirOfService {
     // update own pending updates after recovery from failure
     pub async fn update_pending_requests(
         &mut self,
-        d: HashMap<SocketAddr, HashMap<SocketAddr, Action>>,
+        d: HashMap<SocketAddr, HashMap<String, Action>>,
     ) {
         self.pending_updates = Mutex::new(d);
         println!("{:?}", self.pending_updates);
@@ -180,7 +180,7 @@ impl ServerDirOfService {
             payload: None,
         };
 
-        self.pending_updates.lock().await.remove(&src_addr);
+        self.pending_updates.lock().await.remove(&client_socket);
         let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
         socket.send_to(&serialized_msg, src_addr).await.unwrap();
     }

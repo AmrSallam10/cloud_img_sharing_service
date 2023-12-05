@@ -91,14 +91,14 @@ async fn directory_of_service(backend: Arc<Mutex<ClientBackend>>) -> State {
     };
 
     let mut v: Vec<SocketAddr> = Vec::new();
-    // let own_addr = backend
-    //     .lock()
-    //     .await
-    //     .client_socket
-    //     .clone()
-    //     .local_addr()
-    //     .unwrap();
-    let own_addr: SocketAddr = "127.0.0.1:8091".parse().unwrap();
+    let own_addr = backend
+        .lock()
+        .await
+        .client_socket
+        .clone()
+        .local_addr()
+        .unwrap();
+    // let own_addr: SocketAddr = "127.0.0.1:8091".parse().unwrap();
     let mut users_num = dir_of_serv_map.len() as u32;
 
     let mut idx = 0;
@@ -189,6 +189,13 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("To go back to the main menu enter m.");
     println!("In front of you is a list of the images you shared. Choose an image by selecting its index.");
 
+    let dir_of_serv_map = match backend.lock().await.query_dir_of_serv().await {
+        Some(d) => d,
+        None => HashMap::new(),
+    };
+
+    let mut table: Vec<(String, String)> = Vec::new();
+
     let mut shares_num = 0;
     let back = backend.lock().await;
     let guard = back.own_shared_imgs.lock().await;
@@ -202,9 +209,10 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
                 img_parts.last().unwrap()
             );
             shares_num += 1;
+            table.push((addr.to_string(), img_parts.last().unwrap().to_string()));
         }
     }
-    shares_num = 5;
+    // shares_num = 5;
 
     loop {
         print!("Enter a valid index: ");
@@ -220,18 +228,20 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
             if idx > shares_num || idx < 1 {
                 continue;
             } else {
+                let client_addr = table[(idx - 1) as usize].0.clone();
+                let img_name = table[(idx - 1) as usize].1.clone();
                 let action = get_action().await;
                 if action.is_none() {
                     return State::MainMenu;
+                } else if *dir_of_serv_map
+                    .get(&client_addr.parse::<SocketAddr>().unwrap())
+                    .unwrap()
+                {
+                    back.send_update_access_to_client(img_name, action.unwrap(), client_addr)
+                        .await;
                 } else {
-                    back.send_update_access_to_cloud(
-                        String::from("pic1.png"),
-                        action.unwrap(),
-                        String::from("127.0.0.1:8091"),
-                    )
-                    .await;
-                    // TODO: try to update access if failed send to server
-                    // commit_action(action); // no need for await here
+                    back.send_update_access_to_cloud(img_name, action.unwrap(), client_addr)
+                        .await;
                 }
             }
         }

@@ -102,10 +102,23 @@ impl ClientBackend {
 
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
         let pending_updates = self.query_pending_updates().await;
-        if pending_updates.is_some() {
-            println!("Pending Updates: {:?}", pending_updates.unwrap());
-            // apply these updates
-            // maybe make a new thread and do this in the background
+        if let Some(actions_map) = pending_updates {
+            println!("Pending Updates: {:?}", actions_map);
+            for (key, value) in actions_map {
+                let partial_img_id_parts: Vec<&str> = key.split('&').collect();
+                let img_id = String::from(partial_img_id_parts[0])
+                    + "&"
+                    + self
+                        .client_socket
+                        .local_addr()
+                        .unwrap()
+                        .to_string()
+                        .as_str()
+                    + "&"
+                    + partial_img_id_parts[1];
+                let src_addr = partial_img_id_parts[0].parse::<SocketAddr>().unwrap();
+                ClientBackend::handle_update_access(img_id, value.clone(), src_addr).await;
+            }
         }
         let mut received_complete_imgs: HashMap<String, BigMessage> = HashMap::new();
 
@@ -224,13 +237,7 @@ impl ClientBackend {
             }
 
             Type::UpdateAccess(img_id, action) => {
-                ClientBackend::handle_update_access(
-                    img_id,
-                    action,
-                    client_socket.clone(),
-                    src_addr,
-                )
-                .await;
+                ClientBackend::handle_update_access(img_id, action, src_addr).await;
             }
             _ => {}
         }
@@ -599,12 +606,7 @@ impl ClientBackend {
             .unwrap();
     }
 
-    async fn handle_update_access(
-        img_id: String,
-        action: Action,
-        client_socket: Arc<UdpSocket>,
-        src_addr: SocketAddr,
-    ) {
+    async fn handle_update_access(img_id: String, action: Action, src_addr: SocketAddr) {
         println!("Handle Update Access");
         println!("Image ID: {}", img_id);
         println!("Image New Access: {:?}", action);
@@ -633,6 +635,36 @@ impl ClientBackend {
 
             save_image_buffer(img_buffer, path.clone());
         }
+    }
+
+    pub async fn send_update_access_to_client(
+        &self,
+        img_name: String,
+        action: Action,
+        peer_client_addr: String,
+    ) {
+        let socket = self.client_socket.clone();
+
+        let img_id = format!(
+            "{}&{}&{}",
+            socket.local_addr().unwrap(),
+            peer_client_addr,
+            img_name
+        );
+
+        println!("Sending update access to client {:?}", peer_client_addr);
+        let msg = Msg {
+            sender: socket.local_addr().unwrap(),
+            receiver: peer_client_addr.parse::<SocketAddr>().unwrap(),
+            msg_type: Type::UpdateAccess(img_id.clone(), action.clone()),
+            payload: None,
+        };
+
+        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+        socket
+            .send_to(&serialized_msg, peer_client_addr)
+            .await
+            .unwrap();
     }
 
     pub async fn send_update_access_to_cloud(
@@ -687,7 +719,7 @@ impl ClientBackend {
         // }
     }
 
-    pub async fn query_pending_updates(&self) -> Option<HashMap<SocketAddr, Action>> {
+    pub async fn query_pending_updates(&self) -> Option<HashMap<String, Action>> {
         if let Some(chosen_server) = self
             .send_init_request_to_cloud(Type::ClientRequest(1))
             .await
