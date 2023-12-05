@@ -11,7 +11,7 @@ use std::{collections::HashMap, env, io::Write, net::SocketAddr, sync::Arc};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
-use crate::commons::{ENCRYPTED_PICS_PATH, LOW_RES_PICS_PATH};
+use crate::commons::{Action, ENCRYPTED_PICS_PATH, LOW_RES_PICS_PATH};
 use crate::utils::file_exists;
 
 mod client;
@@ -188,7 +188,23 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
 async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("To go back to the main menu enter m.");
     println!("In front of you is a list of the images you shared. Choose an image by selecting its index.");
-    let shares_num = 5;
+
+    let mut shares_num = 0;
+    let back = backend.lock().await;
+    let guard = back.own_shared_imgs.lock().await;
+    for (addr, imgs) in guard.iter() {
+        for img in imgs {
+            let img_parts: Vec<&str> = img.split('&').collect();
+            println!(
+                "{}. {} - {}",
+                shares_num + 1,
+                addr,
+                img_parts.last().unwrap()
+            );
+            shares_num += 1;
+        }
+    }
+
     loop {
         print!("Enter a valid index: ");
         _ = std::io::stdout().flush();
@@ -218,7 +234,6 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
 async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("To go back to the main menu enter m.");
     println!("In front of you is a list images you have access to. Use image index to select the image you wish to see.");
-    let images_num = 5;
     loop {
         print!("Enter a valid source client: ");
         _ = std::io::stdout().flush();
@@ -244,7 +259,12 @@ async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
             }
 
             let src_addr: SocketAddr = client_dir.parse().unwrap();
-            if !backend.lock().await.view_image(img_name, src_addr).await {
+            if !backend
+                .lock()
+                .await
+                .view_image(img_name.clone(), src_addr)
+                .await
+            {
                 println!("No remaining views for this image");
                 loop {
                     print!("Request more views (y/n)? ");
@@ -268,6 +288,15 @@ async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
                                 };
                                 // TODO: Make a request for the client
                                 // request_extra_views(image_id, val);
+                                backend
+                                    .lock()
+                                    .await
+                                    .request_update_access(
+                                        img_name,
+                                        Action::Increment(val),
+                                        client_dir,
+                                    )
+                                    .await;
                                 return State::ViewImage;
                             }
                         }
@@ -328,12 +357,6 @@ enum State {
     ViewImage,
     EditAccess,
     Quit,
-}
-
-enum Action {
-    Increment(u32),
-    Decrement(u32),
-    Revoke,
 }
 
 #[tokio::main]

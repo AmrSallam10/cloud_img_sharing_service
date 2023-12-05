@@ -42,5 +42,13 @@ pub enum Type {
     LowResImgReply(Fragment),
     ImageRequest(String, u32),
     SharedImage(String, Image, u32),
-    UpdateAccess(String, u32),
+    UpdateAccessRequest(String, Action),
+    UpdateAccess(String, Action),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Action {
+    Increment(u32),
+    Decrement(u32),
+    Revoke,
 }
