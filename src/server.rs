@@ -372,8 +372,19 @@ async fn handle_elec_request(
             dir_of_service
                 .lock()
                 .await
-                .query_reply(service_socket.clone(), src_addr)
+                .query_reply(election_socket.clone(), src_addr)
                 .await;
+        }
+        Type::DirOfServQueryReply(d) => dir_of_service.lock().await.update(d).await,
+        Type::ServerDirOfServQueryPending => {
+            dir_of_service
+                .lock()
+                .await
+                .server_query_pending_reply(election_socket.clone(), src_addr)
+                .await;
+        }
+        Type::ServerDirOfServQueryPendingReply(d) => {
+            dir_of_service.lock().await.update_pending_requests(d).await
         }
         _ => {}
     }
@@ -409,7 +420,11 @@ async fn handle_fail_msg(fail_time: u32, socket: Arc<UdpSocket>, stats: &Arc<Mut
     sleep(sleep_time).await;
     println!("Woke Up!");
     stats.lock().await.down = false;
-    send_fail_msg(socket, stats).await;
+    send_fail_msg(socket.clone(), stats).await;
+
+    ServerDirOfService::query(socket.clone(), stats.lock().await.peer_servers.clone()).await;
+    ServerDirOfService::query_pending(socket.clone(), stats.lock().await.peer_servers.clone())
+        .await;
 }
 
 async fn handle_encryption(
@@ -486,7 +501,13 @@ async fn main() {
     }
 
     ServerDirOfService::query(
-        service_socket.clone(),
+        election_socket.clone(),
+        stats.lock().await.peer_servers.clone(),
+    )
+    .await;
+
+    ServerDirOfService::query_pending(
+        election_socket.clone(),
         stats.lock().await.peer_servers.clone(),
     )
     .await;
@@ -572,8 +593,22 @@ async fn main() {
                                 dir_of_service.lock().await.client_leave(src_addr).await;
                             }
 
-                            Type::DirOfServQueryReply(d) => {
-                                dir_of_service.lock().await.update(d).await
+                            // Type::DirOfServQueryReply(d) => {
+                            //     dir_of_service.lock().await.update(d).await
+                            // }
+                            Type::UpdateAccess(img_id, action) => {
+                                dir_of_service
+                                    .lock()
+                                    .await
+                                    .handle_access_update_req(img_id, action)
+                                    .await
+                            }
+                            Type::ClientDirOfServQueryPending => {
+                                dir_of_service
+                                    .lock()
+                                    .await
+                                    .client_query_pending_reply(service_socket.clone(), src_addr)
+                                    .await;
                             }
                             _ => {}
                         }

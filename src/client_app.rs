@@ -204,6 +204,7 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
             shares_num += 1;
         }
     }
+    shares_num = 5;
 
     loop {
         print!("Enter a valid index: ");
@@ -223,6 +224,12 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
                 if action.is_none() {
                     return State::MainMenu;
                 } else {
+                    back.send_update_access_to_cloud(
+                        String::from("pic1.png"),
+                        action.unwrap(),
+                        String::from("127.0.0.1:8091"),
+                    )
+                    .await;
                     // TODO: try to update access if failed send to server
                     // commit_action(action); // no need for await here
                 }

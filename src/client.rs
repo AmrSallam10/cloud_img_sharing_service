@@ -101,6 +101,12 @@ impl ClientBackend {
         let received_shared_imgs = self.received_shared_imgs.clone();
 
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
+        let pending_updates = self.query_pending_updates().await;
+        if pending_updates.is_some() {
+            println!("Pending Updates: {:?}", pending_updates.unwrap());
+            // apply these updates
+            // maybe make a new thread and do this in the background
+        }
         let mut received_complete_imgs: HashMap<String, BigMessage> = HashMap::new();
 
         let h1 = tokio::spawn({
@@ -323,7 +329,7 @@ impl ClientBackend {
                     // println!("{}", src_addr);
                     if let Ok(response) = std::str::from_utf8(&buffer[.._bytes_read]) {
                         let chosen_server: SocketAddr = response.parse().unwrap();
-                        // println!("{}", chosen_server);
+                        println!("{}", chosen_server);
                         return Some(chosen_server);
                     } else {
                         continue;
@@ -428,7 +434,7 @@ impl ClientBackend {
         let pic_name = *parts.last().unwrap();
         let pic_without_ext = pic_name.split('.').collect::<Vec<&str>>()[0];
         mkdir(path_encrypted.as_str());
-        mkdir(path_decoded.as_str());
+        // mkdir(path_decoded.as_str());
 
         let image_buffer: image::ImageBuffer<Rgba<u8>, Vec<u8>> =
             image::ImageBuffer::from_raw(img.dims.0, img.dims.1, img.data).unwrap();
@@ -438,13 +444,13 @@ impl ClientBackend {
             format!("{}/{}", path_encrypted, pic_name),
         );
 
-        save_image_buffer(
-            image_buffer.clone(),
-            format!("{}/{}.png", path_encrypted, pic_without_ext),
-        );
+        // save_image_buffer(
+        //     image_buffer.clone(),
+        //     format!("{}/{}.png", path_encrypted, pic_without_ext),
+        // );
 
-        let secret_bytes = decode_img(image_buffer).await;
-        let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
+        // let secret_bytes = decode_img(image_buffer).await;
+        // let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
 
         let mut guard = received_shared_imgs.lock().await;
         let entry = guard.entry(src_addr).or_insert(Vec::new());
@@ -627,6 +633,89 @@ impl ClientBackend {
 
             save_image_buffer(img_buffer, path.clone());
         }
+    }
+
+    pub async fn send_update_access_to_cloud(
+        &self,
+        img_name: String,
+        action: Action,
+        peer_client_addr: String,
+    ) {
+        let servers = self.cloud_servers.clone();
+        // let mut buffer = [0; 1024];
+        let socket = self.cloud_socket.clone();
+
+        let img_id = format!(
+            "{}&{}&{}",
+            self.client_socket.local_addr().unwrap(),
+            peer_client_addr,
+            img_name
+        );
+
+        for server in &servers {
+            let target_addr = server.0;
+
+            println!("Sending pending update access to server {:?}", server);
+            let msg = Msg {
+                sender: socket.local_addr().unwrap(),
+                receiver: target_addr,
+                msg_type: Type::UpdateAccess(img_id.clone(), action.clone()),
+                payload: None,
+            };
+            let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+            // let serialized_msg = serde_json::to_string(&msg).unwrap();
+            socket.send_to(&serialized_msg, target_addr).await.unwrap();
+        }
+
+        // wait for election result (server ip)
+        // for _ in 0..5 {
+        //     match socket.recv_from(&mut buffer).await {
+        //         Ok((_bytes_read, src_addr)) => {
+        //             // println!("{}", src_addr);
+        //             if let Ok(response) = std::str::from_utf8(&buffer[.._bytes_read]) {
+        //                 let chosen_server: SocketAddr = response.parse().unwrap();
+        //                 // println!("{}", chosen_server);
+        //                 return Some(chosen_server);
+        //             } else {
+        //                 continue;
+        //             }
+        //         }
+        //         Err(e) => {
+        //             eprintln!("Error getting the result of eletion: {}", e);
+        //         }
+        //     }
+        // }
+    }
+
+    pub async fn query_pending_updates(&self) -> Option<HashMap<SocketAddr, Action>> {
+        if let Some(chosen_server) = self
+            .send_init_request_to_cloud(Type::ClientRequest(1))
+            .await
+        {
+            ClientDirOfService::query_pending(self.cloud_socket.clone(), chosen_server).await;
+
+            let mut buffer = [0; 2048];
+            for _ in 0..5 {
+                // println!("Received bytes from cloud");
+                match self.cloud_socket.recv_from(&mut buffer).await {
+                    Ok((bytes_read, src_addr)) => {
+                        match serde_cbor::de::from_slice(&buffer[..bytes_read]) {
+                            Ok(Msg {
+                                msg_type: Type::ClientDirOfServQueryPendingReply(r),
+                                ..
+                            }) => return r,
+                            Ok(_) => continue,
+                            Err(e) => continue,
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error getting the result of election: {}", e);
+                        continue;
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub async fn query_dir_of_serv(&self) -> Option<HashMap<SocketAddr, bool>> {
