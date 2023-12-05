@@ -15,7 +15,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
-use steganography::decoder::Decoder;
 use tokio::fs;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
