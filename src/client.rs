@@ -54,7 +54,7 @@ impl ClientBackend {
             .parse()
             .expect("Failed to parse IP from input");
 
-        let ip_to_clients = SocketAddr::new(ip_to_cloud.ip(), ip_to_cloud.port() + 1);
+        let ip_to_clients: SocketAddr = SocketAddr::new(ip_to_cloud.ip(), ip_to_cloud.port() + 1);
         let next_req_id = get_req_id_log(REQ_ID_LOG_FILEPATH);
 
         let cloud_socket: Arc<UdpSocket> = Arc::new(
@@ -501,14 +501,7 @@ impl ClientBackend {
 
         // Main event loop
         while window.is_open() && !window.is_key_down(Key::Escape) {
-            window.get_keys().iter().for_each(|key|
-                match key {
-                    Key::Escape => println!("ESC pressed, closing window"),
-                    _ => (),
-                }
-            );
-
-        
+                   
             // Update the window with the image data
             let buffer: Vec<u32> = decoded_buffer
                 .pixels()
