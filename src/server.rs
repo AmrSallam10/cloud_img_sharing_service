@@ -375,6 +375,17 @@ async fn handle_elec_request(
                 .query_reply(service_socket.clone(), src_addr)
                 .await;
         }
+        Type::ClientDirOfServQueryPending => {
+            dir_of_service
+                .lock()
+                .await
+                .client_query_pending_reply(service_socket.clone(), src_addr)
+                .await;
+        }
+        Type::ServerDirOfServQueryPending => {
+            dir_of_service.lock().await.server_query_pending_reply(service_socket.clone(), src_addr)
+            .await;
+        }
         _ => {}
     }
 }
@@ -410,6 +421,16 @@ async fn handle_fail_msg(fail_time: u32, socket: Arc<UdpSocket>, stats: &Arc<Mut
     println!("Woke Up!");
     stats.lock().await.down = false;
     send_fail_msg(socket, stats).await;
+    ServerDirOfService::query(
+        service_socket.clone(),
+        stats.lock().await.peer_servers.clone(),
+    )
+    .await;
+    ServerDirOfService::query_pending(
+        service_socket.clone(),
+        stats.lock().await.peer_servers.clone(),
+    )
+    .await;
 }
 
 async fn handle_encryption(
@@ -486,6 +507,11 @@ async fn main() {
     }
 
     ServerDirOfService::query(
+        service_socket.clone(),
+        stats.lock().await.peer_servers.clone(),
+    )
+    .await;
+    ServerDirOfService::query_pending(
         service_socket.clone(),
         stats.lock().await.peer_servers.clone(),
     )
@@ -574,6 +600,9 @@ async fn main() {
 
                             Type::DirOfServQueryReply(d) => {
                                 dir_of_service.lock().await.update(d).await
+                            }
+                            Type::ServerDirOfServQueryPendingReply(d) => {
+                                dir_of_service.lock().await.update_pending_requests(d).await
                             }
                             _ => {}
                         }

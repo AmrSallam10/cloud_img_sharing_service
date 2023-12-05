@@ -9,7 +9,8 @@
 extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
-use image::{open, ImageBuffer, Rgba};
+use gtk::gdk::keys::constants::Back;
+use image::{open, ImageBuffer, Rgba, buffer};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -97,6 +98,12 @@ impl ClientBackend {
         let mut clients_buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
         let client_socket = self.client_socket.clone();
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
+        let pending_updates = self.query_pending_updates().await;
+        if pending_updates.is_some() {
+            println!("Pending Updates: {:?}", pending_updates.unwrap());
+            // apply these updates
+            // maybe make a new thread and do this in the background
+        }
         let mut received_complete_imgs: HashMap<String, BigMessage> = HashMap::new();
         let mut encoded_images: HashMap<String, Image> = HashMap::new();
 
@@ -543,6 +550,35 @@ impl ClientBackend {
         //     .send_to(&serialized_msg, src_addr)
         //     .await
         //     .unwrap();
+    }
+
+    pub async fn query_pending_updates(&self) -> Option<HashMap<SocketAddr,Action>> {
+        if let Some(chosen_server) = self
+            .send_init_request_to_cloud(Type::ClientRequest(1))
+            .await
+        {
+            ClientDirOfService::query_pending(self.cloud_socket.clone(), chosen_server).await;
+
+            let mut buffer = [0; 2048];
+            for _ in 0..5 {
+                match self.client_socket.recv_from(&mut buffer).await {
+                    Ok((bytes_read, src_addr)) => {
+                        match serde_cbor::de::from_slice(&buffer[..bytes_read]) {
+                            Ok(Msg {
+                                msg_type: Type::ClientDirOfServQueryPendingReply(r),
+                                ..
+                            }) => return r,
+                            Ok(_) => continue,
+                            Err(e) => continue,
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error getting the result of election: {}", e);
+                        continue;
+                    }
+                }
+            }
+        }
     }
 
     pub async fn query_dir_of_serv(&self) -> Option<HashMap<SocketAddr, bool>> {
