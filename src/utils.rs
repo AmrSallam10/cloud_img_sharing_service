@@ -120,7 +120,7 @@ pub fn get_pic_paths(filepath: &str) -> Vec<String> {
 
 pub fn file_exists(file_path: &str) -> bool {
     if let Ok(metadata) = fs::metadata(file_path) {
-        metadata.is_file()
+        metadata.is_file() || metadata.is_dir()
     } else {
         false
     }

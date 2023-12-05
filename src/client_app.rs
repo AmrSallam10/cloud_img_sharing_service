@@ -11,6 +11,9 @@ use std::{collections::HashMap, env, io::Write, net::SocketAddr, sync::Arc};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
+use crate::commons::{ENCRYPTED_PICS_PATH, LOW_RES_PICS_PATH};
+use crate::utils::file_exists;
+
 mod client;
 mod commons;
 mod dir_of_service;
@@ -88,20 +91,32 @@ async fn directory_of_service(backend: Arc<Mutex<ClientBackend>>) -> State {
     };
 
     let mut v: Vec<SocketAddr> = Vec::new();
+    // let own_addr = backend
+    //     .lock()
+    //     .await
+    //     .client_socket
+    //     .clone()
+    //     .local_addr()
+    //     .unwrap();
+    let own_addr: SocketAddr = "127.0.0.1:8091".parse().unwrap();
+    let mut users_num = dir_of_serv_map.len() as u32;
 
     let mut idx = 0;
     for (usr, status) in &dir_of_serv_map {
-        idx += 1;
-        println!(
-            "{}. {} | {}",
-            idx,
-            usr,
-            if *status { "online" } else { "offline" }
-        );
-        v.push(*usr);
+        if *usr != own_addr {
+            idx += 1;
+            println!(
+                "{}. {} | {}",
+                idx,
+                usr,
+                if *status { "online" } else { "offline" }
+            );
+            v.push(*usr);
+        } else {
+            users_num -= 1;
+        }
     }
 
-    let users_num = dir_of_serv_map.len() as u32;
     loop {
         print!("Enter a valid index: ");
         _ = std::io::stdout().flush();
@@ -134,16 +149,20 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
         .await;
 
     loop {
-        print!("Enter the image id: ");
+        print!("Enter the image name: ");
         _ = std::io::stdout().flush();
-        let img_id = read_input().await;
-        if img_id == "m" {
+        let img_name = read_input().await;
+        if img_name == "m" {
             return State::MainMenu;
         }
-        let img_id: u32 = match img_id.parse() {
-            Ok(num) => num,
-            Err(_) => continue,
-        };
+        if !file_exists(format!("{}/{}/{}", LOW_RES_PICS_PATH, client_addr, img_name).as_str()) {
+            println!("This file does not exist!");
+            continue;
+        }
+        // let img_id: u32 = match img_id.parse() {
+        //     Ok(num) => num,
+        //     Err(_) => continue,
+        // };
         print!("Enter the number of requested views: ");
         _ = std::io::stdout().flush();
         let req_views = read_input().await;
@@ -157,7 +176,7 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
         backend
             .lock()
             .await
-            .send_image_request(img_id, req_views, client_addr)
+            .send_image_request(img_name, req_views, client_addr)
             .await;
         return State::MainMenu;
         // TODO: request image to be viewed
@@ -201,51 +220,55 @@ async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("In front of you is a list images you have access to. Use image index to select the image you wish to see.");
     let images_num = 5;
     loop {
-        print!("Enter a valid index: ");
+        print!("Enter a valid source client: ");
         _ = std::io::stdout().flush();
+        let mut client_dir = String::new();
         let input = read_input().await;
         if input == "m" {
             return State::MainMenu;
+        } else if !file_exists(format!("{}/{}", ENCRYPTED_PICS_PATH, input).as_str()) {
+            println!("You have no images from this client");
+            continue;
         } else {
-            let idx: u32 = match input.parse() {
-                Ok(num) => num,
-                Err(_) => continue,
-            };
-            if idx > images_num || idx < 1 {
+            client_dir = input;
+            print!("Enter a valid image name: ");
+            _ = std::io::stdout().flush();
+            let img_name = read_input().await;
+            if img_name == "m" {
+                return State::MainMenu;
+            }
+            if !file_exists(format!("{}/{}/{}", ENCRYPTED_PICS_PATH, client_dir, img_name).as_str())
+            {
+                println!("This file does not exist!");
                 continue;
-            } else {
-                // TODO: show image on a pop up if user still can access
-                let can_access = true;
-                if can_access {
-                    // show_image(idx).await;
-                    let src_addr: SocketAddr = "127.0.0.1:8091".parse().unwrap();
-                    backend.lock().await.view_image(1, src_addr).await;
-                } else {
-                    println!("You exceeded the number of allowed access.\n");
-                    loop {
-                        print!("Request more views (y/n)? ");
-                        _ = std::io::stdout().flush();
-                        let input = read_input().await;
-                        if input == "m" {
-                            return State::MainMenu;
-                        } else if input == "n" {
-                            return State::ViewImage;
-                        } else if input == "y" {
-                            loop {
-                                print!("Enter the number of accesses: ");
-                                _ = std::io::stdout().flush();
-                                let input = read_input().await;
-                                if input == "m" {
-                                    return State::MainMenu;
-                                } else {
-                                    let val: u32 = match input.parse() {
-                                        Ok(num) => num,
-                                        Err(_) => continue,
-                                    };
-                                    // TODO: Make a request for the client
-                                    // request_extra_views(image_id, val);
-                                    return State::ViewImage;
-                                }
+            }
+
+            let src_addr: SocketAddr = client_dir.parse().unwrap();
+            if !backend.lock().await.view_image(img_name, src_addr).await {
+                println!("No remaining views for this image");
+                loop {
+                    print!("Request more views (y/n)? ");
+                    _ = std::io::stdout().flush();
+                    let input = read_input().await;
+                    if input == "m" {
+                        return State::MainMenu;
+                    } else if input == "n" {
+                        return State::ViewImage;
+                    } else if input == "y" {
+                        loop {
+                            print!("Enter the number of accesses: ");
+                            _ = std::io::stdout().flush();
+                            let input = read_input().await;
+                            if input == "m" {
+                                return State::MainMenu;
+                            } else {
+                                let val: u32 = match input.parse() {
+                                    Ok(num) => num,
+                                    Err(_) => continue,
+                                };
+                                // TODO: Make a request for the client
+                                // request_extra_views(image_id, val);
+                                return State::ViewImage;
                             }
                         }
                     }

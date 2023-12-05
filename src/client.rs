@@ -43,7 +43,7 @@ use fragment::Image;
 
 pub struct ClientBackend {
     cloud_socket: Arc<UdpSocket>,
-    client_socket: Arc<UdpSocket>,
+    pub client_socket: Arc<UdpSocket>,
     next_req_id: u32,
     mode: String,
     cloud_servers: Vec<(SocketAddr, SocketAddr)>,
@@ -178,9 +178,9 @@ impl ClientBackend {
                     }
                 }
             }
-            Type::ImageRequest(img_id, requested_access) => {
+            Type::ImageRequest(img_name, requested_access) => {
                 ClientBackend::handle_image_request(
-                    img_id,
+                    img_name,
                     requested_access,
                     client_socket.clone(),
                     src_addr,
@@ -321,7 +321,7 @@ impl ClientBackend {
 
     pub async fn send_image_request(
         &self,
-        img_id: u32,
+        img_name: String,
         requested_access: u32,
         peer_client_addr: SocketAddr,
     ) {
@@ -329,7 +329,7 @@ impl ClientBackend {
         let msg = Msg {
             sender: self.client_socket.local_addr().unwrap(),
             receiver: peer_client_addr,
-            msg_type: Type::ImageRequest(img_id, requested_access),
+            msg_type: Type::ImageRequest(img_name, requested_access),
             payload: None,
         };
         let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
@@ -340,13 +340,14 @@ impl ClientBackend {
     }
 
     async fn handle_image_request(
-        img_id: u32,
+        img_name: String,
         requested_access: u32,
         client_socket: Arc<UdpSocket>,
         src_addr: SocketAddr,
     ) {
         println!("Handle Image Request");
-        let path = format!("{}/pic{}.png", ENCRYPTED_PICS_PATH, img_id);
+        let img_parts: Vec<&str> = img_name.split('.').collect();
+        let path = format!("{}/{}.png", ENCRYPTED_PICS_PATH, img_parts.first().unwrap());
 
         let img_buffer = file_as_image_buffer(path);
 
@@ -364,16 +365,16 @@ impl ClientBackend {
         let msg = Msg {
             sender: client_socket.local_addr().unwrap(),
             receiver: src_addr,
-            msg_type: Type::SharedImage(img_id, image, requested_access),
+            msg_type: Type::SharedImage(img_name.clone(), image, requested_access),
             payload: None,
         };
 
         let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
         let pic_id = format!(
-            "{}&{}&pic{}.jpg",
+            "{}&{}&{}",
             client_socket.local_addr().unwrap(),
             src_addr,
-            img_id
+            img_name
         );
 
         fragment::client_send(
@@ -422,8 +423,8 @@ impl ClientBackend {
         let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
     }
 
-    pub async fn view_image(&self, img_id: u32, src_addr: SocketAddr) {
-        let path = format!("{}/{}/pic{}.png", ENCRYPTED_PICS_PATH, src_addr, img_id);
+    pub async fn view_image(&self, img_name: String, src_addr: SocketAddr) -> bool {
+        let path = format!("{}/{}/{}", ENCRYPTED_PICS_PATH, src_addr, img_name);
         let mut img_buffer = file_as_image_buffer(path.clone());
         let (width, height) = img_buffer.dimensions();
         let access_pixel = img_buffer.get_pixel_mut(width - 1, height - 1);
@@ -432,8 +433,8 @@ impl ClientBackend {
 
         //Check if there is still access to the image
         if access == 0 {
-            println!("No remaining views for this image");
-            gtk::main_quit();
+            // gtk::main_quit();
+            return false;
         }
 
         access_pixel[3] -= 1;
@@ -456,7 +457,18 @@ impl ClientBackend {
         window.set_default_size(500, 500);
 
         // Create an image and load it from a file
-        let image = gtkImage::from_file(path);
+        let encoded_image = file_as_image_buffer(path);
+        let decoded_image_bin = decode_img(encoded_image).await;
+
+        let pic_name_parts: Vec<&str> = img_name.split('.').collect();
+        let pic_name_without_ext = pic_name_parts.first().unwrap();
+        let path_tmp = format!(
+            "{}/{}/.{}.jpg",
+            ENCRYPTED_PICS_PATH, src_addr, pic_name_without_ext
+        );
+        // save_image_buffer(image_buffer.clone(), path_tmp.clone());
+        let _ = tokio::fs::write(path_tmp.clone(), decoded_image_bin).await;
+        let image = gtkImage::from_file(path_tmp);
 
         // // Create a Pixbuf from the image data
         // pixbuf = Pixbuf::new_from_mut_slice(
@@ -486,6 +498,10 @@ impl ClientBackend {
             gtk::main_quit();
         });
 
+        window.connect_destroy(|_| {
+            gtk::main_quit();
+        });
+
         // Set the window's content to the vertical box
         window.add(&vbox);
         // Show all the elements in the window
@@ -493,6 +509,7 @@ impl ClientBackend {
 
         // Run the GTK main loop
         gtk::main();
+        true
     }
 
     pub async fn request_update_access(

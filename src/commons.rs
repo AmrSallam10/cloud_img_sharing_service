@@ -40,7 +40,7 @@ pub enum Type {
     DirOfServLeave,
     LowResImgReq,
     LowResImgReply(Fragment),
-    ImageRequest(u32, u32),
-    SharedImage(u32, Image, u32),
+    ImageRequest(String, u32),
+    SharedImage(String, Image, u32),
     UpdateAccess(String, u32),
 }
