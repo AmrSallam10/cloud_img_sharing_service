@@ -751,6 +751,7 @@ name = "project"
 version = "0.1.0"
 dependencies = [
  "image",
+ "log",
  "minifb",
  "rand",
  "rand_chacha",

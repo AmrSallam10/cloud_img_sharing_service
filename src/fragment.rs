@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
-
+use log::{trace, error};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fragment {
     pub msg_id: String,
@@ -63,7 +63,7 @@ pub async fn client_send(
     let msg_len = data.len();
 
     let mut buffer = [0; BUFFER_SIZE];
-    println!("{}", msg_id);
+    trace!("{}", msg_id);
 
     let mut curr_block = 0;
     while curr_block < block_num {
@@ -99,7 +99,7 @@ pub async fn client_send(
                 payload: None,
             };
 
-            println!(
+            trace!(
                 "Sending msg wrapping fragment {} of size {}.",
                 frag_id, data_size
             );
@@ -114,7 +114,7 @@ pub async fn client_send(
         let sleep = time::sleep(Duration::from_millis(TIMEOUT_MILLIS as u64));
         tokio::pin!(sleep);
 
-        println!("Waiting for an ACK for block {}", curr_block);
+        trace!("Waiting for an ACK for block {}", curr_block);
 
         // wait for an ack
         tokio::select! {
@@ -122,7 +122,7 @@ pub async fn client_send(
                 // wait for the ack
 
                 if let Ok(msg) = serde_cbor::de::from_slice::<Msg>(&buffer[..bytes_read]){
-                    println!("{:?}", msg);
+                    trace!("{:?}", msg);
 
                     // TODO: Need logic to handle unexpected messages without breaking select!
                     //       Consider checking if conditions in the matching of branch conditions
@@ -134,7 +134,7 @@ pub async fn client_send(
                 };
             }
             _ = &mut sleep => {
-                println!("timeout");
+                trace!("timeout");
             }
         }
     }
@@ -181,7 +181,7 @@ pub async fn server_send(
                 payload: None,
             };
 
-            println!(
+            trace!(
                 "[{}] Sending message wrapping fragment {} of size {}.",
                 msg_id, frag_id, data_size
             );
@@ -196,7 +196,7 @@ pub async fn server_send(
         let sleep = time::sleep(Duration::from_millis(TIMEOUT_MILLIS as u64));
         tokio::pin!(sleep);
 
-        println!("Waiting for an ACK for block {}", curr_block);
+        trace!("Waiting for an ACK for block {}", curr_block);
 
         // wait for an ack
         tokio::select! {
@@ -211,7 +211,7 @@ pub async fn server_send(
             }
         }
             _ = &mut sleep => {
-                println!("timeout");
+                trace!("timeout");
             }
         }
     }
@@ -225,17 +225,17 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
     loop {
         match socket.recv_from(&mut buffer).await {
             Ok((bytes_read, src_addr)) => {
-                println!("{} bytes from {}.", bytes_read, src_addr);
+                trace!("{} bytes from {}.", bytes_read, src_addr);
 
                 if let Ok(msg) = serde_cbor::de::from_slice::<Msg>(&buffer[..bytes_read]) {
                     let frag = match msg.msg_type {
                         Type::Fragment(frag) => frag,
                         _ => {
-                            println!("Could not parse fragment");
+                            trace!("Could not parse fragment");
                             continue;
                         }
                     };
-                    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+                    trace!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
                     let mut new_frag = false;
 
                     let st_idx = FRAG_SIZE * (frag.frag_id as usize);
@@ -269,7 +269,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                             let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                                 / (FRAG_SIZE * BLOCK_SIZE)
                                 - 1;
-                            println!("Sending ACK for block {}", block_id);
+                            trace!("Sending ACK for block {}", block_id);
                             let receiver: SocketAddr =
                                 format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
                                     .parse()
@@ -281,7 +281,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                                 payload: None,
                             };
 
-                            println!("{:?}", ack);
+                            trace!("{:?}", ack);
                             let ack = serde_cbor::ser::to_vec(&ack).unwrap();
                             socket
                                 .send_to(&ack, receiver.to_string())
@@ -289,7 +289,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                                 .expect("Failed to send!");
                         }
                         if msg.received_len == msg.msg_len {
-                            println!("Full message is received!");
+                            trace!("Full message is received!");
                             let msg = msg.to_owned();
                             e.insert(msg.clone());
                             return msg.data;
@@ -317,7 +317,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                                 - 1)
                                 / (FRAG_SIZE * BLOCK_SIZE)
                                 - 1;
-                            println!("Sending ACK for block {}", block_id);
+                            trace!("Sending ACK for block {}", block_id);
                             let receiver: SocketAddr =
                                 format!("{}:{}", src_addr.ip(), src_addr.port() - 2)
                                     .parse()
@@ -329,7 +329,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                                 payload: None,
                             };
 
-                            println!("{:?}", ack);
+                            trace!("{:?}", ack);
                             let ack = serde_cbor::ser::to_vec(&ack).unwrap();
                             socket
                                 .send_to(&ack, receiver.to_string())
@@ -337,7 +337,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                                 .expect("Failed to send!");
                         }
                         if new_frag && big_msg.received_len == big_msg.msg_len {
-                            println!("Full message is received!");
+                            trace!("Full message is received!");
                             let big_msg = big_msg.to_owned();
                             return big_msg.data;
                         }
@@ -347,7 +347,7 @@ pub async fn receive_all(socket: Arc<UdpSocket>) -> Vec<u8> {
                 };
             }
             Err(e) => {
-                eprintln!("Error receiving data: {}", e);
+                error!("Error receiving data: {}", e);
             }
         }
     }
@@ -359,7 +359,7 @@ pub async fn receive_one(
     src_addr: std::net::SocketAddr,
     map: &mut HashMap<String, BigMessage>,
 ) -> Option<String> {
-    println!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
+    trace!("[{}] Received fragment {}.", frag.msg_id, frag.frag_id);
     let mut new_frag = false;
 
     let st_idx = FRAG_SIZE * (frag.frag_id as usize);
@@ -371,7 +371,7 @@ pub async fn receive_one(
     // if this is the first fragment create a new entry in the map
     if let std::collections::hash_map::Entry::Vacant(e) = map.entry(frag.msg_id.clone()) {
         let mut msg_data = vec![0; frag.msg_len as usize];
-        println!("{}", frag.msg_id);
+        trace!("{}", frag.msg_id);
         msg_data[st_idx..end_idx].copy_from_slice(&frag.data);
 
         let mut received_frags = HashSet::new();
@@ -391,7 +391,7 @@ pub async fn receive_one(
             let block_id = (msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                 / (FRAG_SIZE * BLOCK_SIZE)
                 - 1;
-            println!("Sending ACK for block {}", block_id);
+            trace!("Sending ACK for block {}", block_id);
             let ack = Msg {
                 msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
                 sender: socket.local_addr().unwrap(),
@@ -406,7 +406,7 @@ pub async fn receive_one(
                 .expect("Failed to send!");
         }
         if msg.received_len == msg.msg_len {
-            println!("Full message is received!");
+            trace!("Full message is received!");
             e.insert(msg);
             return Some(frag.msg_id);
         }
@@ -432,7 +432,7 @@ pub async fn receive_one(
             let block_id = (big_msg.received_len as usize + FRAG_SIZE * BLOCK_SIZE - 1)
                 / (FRAG_SIZE * BLOCK_SIZE)
                 - 1;
-            println!("Sending ACK for block {}", block_id);
+            trace!("Sending ACK for block {}", block_id);
             let ack = Msg {
                 msg_type: Type::Ack(frag.msg_id.clone(), block_id as u32),
                 sender: socket.local_addr().unwrap(),
@@ -447,7 +447,7 @@ pub async fn receive_one(
                 .expect("Failed to send!");
         }
         if new_frag && big_msg.received_len == big_msg.msg_len {
-            println!("Full message is received!");
+            trace!("Full message is received!");
             return Some(frag.msg_id);
         }
     }

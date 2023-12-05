@@ -1,6 +1,7 @@
 use crate::commons::{ELECTION_PORT, SERVICE_PORT, SERVICE_SENDBACK_PORT};
 use crate::commons::{ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH};
 use std::{fs, net::SocketAddr};
+use log::error;
 
 pub async fn get_peer_servers(
     filepath: &str,
@@ -41,7 +42,7 @@ pub async fn get_ips(ip: &str, mode: &str) -> (SocketAddr, SocketAddr, SocketAdd
             (ip_service, ip_elec, ip_send)
         }
         _ => {
-            eprintln!("Invalid mode. Use 'local' or 'distributed'.");
+            error!("Invalid mode. Use 'local' or 'distributed'.");
             std::process::exit(1);
         }
     };

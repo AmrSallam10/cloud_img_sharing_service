@@ -19,6 +19,7 @@ use tokio::fs;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use minifb::{Key, Window, WindowOptions};
+use log::{info, warn, log, error, trace};
 use crate::commons::{
     self, Action, ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH,
     REQ_ID_LOG_FILEPATH,
@@ -61,14 +62,14 @@ impl ClientBackend {
                 .await
                 .expect("Failed to bind to ip"),
         );
-        println!("Cloud Communication on {ip_to_cloud}");
+        info!("Cloud Communication on {ip_to_cloud}");
 
         let client_socket = Arc::new(
             UdpSocket::bind(ip_to_clients)
                 .await
                 .expect("Failed to bind to ip"),
         );
-        println!("Clients Communication on {ip_to_clients}");
+        info!("Clients Communication on {ip_to_clients}");
 
         let cloud_servers = get_cloud_servers(SERVERS_FILEPATH, mode);
 
@@ -94,7 +95,7 @@ impl ClientBackend {
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
         let pending_updates = self.query_pending_updates().await;
         if let Some(actions_map) = pending_updates {
-            println!("Pending Updates: {:?}", actions_map);
+            info!("Pending Updates: {:?}", actions_map);
             for (key, value) in actions_map {
                 let partial_img_id_parts: Vec<&str> = key.split('&').collect();
                 let img_id = String::from(partial_img_id_parts[0])
@@ -118,7 +119,7 @@ impl ClientBackend {
                 loop {
                     match client_socket.recv_from(&mut clients_buffer).await {
                         Ok((bytes_read, src_addr)) => {
-                            println!("{} bytes from {}.", bytes_read, src_addr);
+                            info!("{} bytes from {}.", bytes_read, src_addr);
 
                             let msg: Msg =
                                 serde_cbor::de::from_slice(&clients_buffer[..bytes_read])
@@ -135,7 +136,7 @@ impl ClientBackend {
                             .await;
                         }
                         Err(e) => {
-                            eprintln!("Error receiving data from client socket: {}", e);
+                            error!("Error receiving data from client socket: {}", e);
                         }
                     }
                 }
@@ -235,7 +236,7 @@ impl ClientBackend {
     }
 
     pub async fn request_low_res_images(&self, client_addr: SocketAddr) {
-        println!("Send Low Res Image Request");
+        info!("Send Low Res Image Request");
         let msg = Msg {
             sender: self.client_socket.local_addr().unwrap(),
             receiver: client_addr,
@@ -255,7 +256,7 @@ impl ClientBackend {
 
         for pic in &pics {
             let path = format!("{}/{}", LOW_RES_PICS_PATH, pic);
-            println!("{}", path);
+            trace!("{}", path);
 
             let pic_bin = fs::read(path).await.unwrap();
             // src unique
@@ -268,8 +269,8 @@ impl ClientBackend {
                 true,
             )
             .await;
-            println!("Finished sending pic");
         }
+        info!("Finished sending low res pics");
     }
 
     async fn handle_low_res_imgs_reply(
@@ -308,7 +309,7 @@ impl ClientBackend {
         for server in &servers {
             let target_addr = server.1;
 
-            println!("Sending to server {:?}", server);
+            info!("Sending to server {:?}", server);
             let msg = Msg {
                 sender: socket.local_addr().unwrap(),
                 receiver: target_addr,
@@ -324,17 +325,16 @@ impl ClientBackend {
         for _ in 0..5 {
             match socket.recv_from(&mut buffer).await {
                 Ok((_bytes_read, src_addr)) => {
-                    // println!("{}", src_addr);
                     if let Ok(response) = std::str::from_utf8(&buffer[.._bytes_read]) {
                         let chosen_server: SocketAddr = response.parse().unwrap();
-                        println!("{}", chosen_server);
+                        info!("{}", chosen_server);
                         return Some(chosen_server);
                     } else {
                         continue;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error getting the result of eletion: {}", e);
+                    error!("Error getting the result of eletion: {}", e);
                 }
             }
         }
