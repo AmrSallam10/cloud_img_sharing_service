@@ -19,15 +19,7 @@ use steganography::decoder::Decoder;
 use tokio::fs;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-extern crate gdk_pixbuf;
-extern crate gtk;
-
-use gdk_pixbuf::Pixbuf;
-use gtk::gdk::ATOM_NONE;
-use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Button, ScrolledWindow};
-use gtk::{Image as gtkImage, Label, Window, WindowType};
-
+use minifb::{Key, Window, WindowOptions};
 use crate::commons::{
     self, Action, ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH,
     REQ_ID_LOG_FILEPATH,
@@ -474,82 +466,61 @@ impl ClientBackend {
 
         //Check if there is still access to the image
         if access == 0 {
-            // gtk::main_quit();
             return false;
         }
 
         access_pixel[3] -= 1;
+
+        let secret_bytes = decode_img(img_buffer.clone()).await;
+        let decoded_buffer = image::load_from_memory(&secret_bytes).unwrap();
+        let decoded_buffer = decoded_buffer.to_rgba8();
+        let (width_decoded, height_decoded) = decoded_buffer.dimensions();
+
         save_image_buffer(img_buffer, path.clone());
 
-        // Initialize GTK
-        gtk::init().expect("Failed to initialize GTK.");
-
-        // Create a new top-level window
-        let window = Window::new(WindowType::Toplevel);
-
+        let name_without_ext = img_name.split('.').collect::<Vec<&str>>()[0];
         // Set the title and size of the window
         let viewer_title = format!(
-            "Image from {:?}               Remaining Views: {}",
-            src_addr, access
+            "Image from: {:?}\t\t\t\t\tImage name: {}\t\t\t\t\tRemaining Views: {}",
+            src_addr, name_without_ext, access-1
         );
-        window.set_title(&viewer_title);
 
-        // window.set_default_size(width as i32, height as i32);
-        window.set_default_size(500, 500);
+        // Create a window to display the image
+        let mut window = Window::new(
+            viewer_title.as_str(),
+            1024,
+            768,
+            WindowOptions {
+                resize: true,
+                scale: minifb::Scale::X2,
+                ..Default::default()
+            },
+        )
+        .expect("Failed to create window");
 
-        // Create an image and load it from a file
-        let encoded_image = file_as_image_buffer(path);
-        let decoded_image_bin = decode_img(encoded_image).await;
+ 
 
-        let pic_name_parts: Vec<&str> = img_name.split('.').collect();
-        let pic_name_without_ext = pic_name_parts.first().unwrap();
-        let path_tmp = format!(
-            "{}/{}/.{}.jpg",
-            ENCRYPTED_PICS_PATH, src_addr, pic_name_without_ext
-        );
-        // save_image_buffer(image_buffer.clone(), path_tmp.clone());
-        let _ = tokio::fs::write(path_tmp.clone(), decoded_image_bin).await;
-        let image = gtkImage::from_file(path_tmp);
+        // Main event loop
+        while window.is_open() && !window.is_key_down(Key::Escape) {
+            window.get_keys().iter().for_each(|key|
+                match key {
+                    Key::Escape => println!("ESC pressed, closing window"),
+                    _ => (),
+                }
+            );
 
-        // // Create a Pixbuf from the image data
-        // pixbuf = Pixbuf::new_from_mut_slice(
-        //     img_buffer.into_raw(),
-        //     gdk_pixbuf::Colorspace::Rgb,
-        //     true,
-        //     8,
-        //     width as i32,
-        //     height as i32,
-        //     width as i32 * 4,
-        // );
+        
+            // Update the window with the image data
+            let buffer: Vec<u32> = decoded_buffer
+                .pixels()
+                .map(|p| ((p[0] as u32) << 16) | ((p[1] as u32) << 8) | p[2] as u32)
+                .collect();
 
-        // // Create a GtkImage widget and set its Pixbuf
-        // let gtk_image = GtkImage::new_from_pixbuf(Some(&pixbuf));
+            window
+                .update_with_buffer(&buffer, width_decoded as usize, height_decoded as usize)
+                .expect("Failed to update window");
 
-        // Create a button to close the window
-        let button = Button::with_label("Close");
-
-        // Create a vertical box to hold the image and button
-        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        vbox.set_size_request(500, 500);
-        vbox.pack_start(&image, false, false, 0);
-        vbox.pack_start(&button, false, false, 0);
-
-        // Connect the button's clicked signal to a callback that closes the window and reduces the remaining views
-        button.connect_clicked(|_| {
-            gtk::main_quit();
-        });
-
-        window.connect_destroy(|_| {
-            gtk::main_quit();
-        });
-
-        // Set the window's content to the vertical box
-        window.add(&vbox);
-        // Show all the elements in the window
-        window.show_all();
-
-        // Run the GTK main loop
-        gtk::main();
+        }
         true
     }
 
