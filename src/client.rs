@@ -15,7 +15,8 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
-use tokio::fs;
+use tokio::io::AsyncBufReadExt;
+use tokio::{self, fs};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use minifb::{Key, Window, WindowOptions};
@@ -44,6 +45,7 @@ pub struct ClientBackend {
     received_complete_imgs: HashMap<String, BigMessage>,
     pub own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
     pub received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+    pub requests: Arc<Mutex<HashMap<String, Action>>>,
 }
 
 impl ClientBackend {
@@ -83,6 +85,7 @@ impl ClientBackend {
             received_complete_imgs: HashMap::new(),
             own_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
             received_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
+            requests: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
@@ -91,7 +94,7 @@ impl ClientBackend {
         let client_socket = self.client_socket.clone();
         let own_shared_imgs = self.own_shared_imgs.clone();
         let received_shared_imgs = self.received_shared_imgs.clone();
-
+        let requests = self.requests.clone();
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
         let pending_updates = self.query_pending_updates().await;
         if let Some(actions_map) = pending_updates {
@@ -132,6 +135,7 @@ impl ClientBackend {
                                 &mut received_complete_imgs,
                                 own_shared_imgs.clone(),
                                 received_shared_imgs.clone(),
+                                requests.clone(),
                             )
                             .await;
                         }
@@ -151,6 +155,7 @@ impl ClientBackend {
         received_complete_imgs: &mut HashMap<String, BigMessage>,
         own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
         received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+        requests: Arc<Mutex<HashMap<String, Action>>>,
     ) {
         match msg.msg_type {
             Type::LowResImgReq => {
@@ -219,13 +224,14 @@ impl ClientBackend {
             //     .await;
             // }
             Type::UpdateAccessRequest(img_id, action) => {
-                ClientBackend::handle_update_access_req(
-                    img_id,
-                    action,
-                    client_socket.clone(),
-                    src_addr,
-                )
-                .await;
+                requests.lock().await.insert(img_id, action);
+                // ClientBackend::handle_update_access_req(
+                //     img_id,
+                //     action,
+                //     client_socket.clone(),
+                //     src_addr,
+                // )
+                // .await;
             }
 
             Type::UpdateAccess(img_id, action) => {
@@ -542,7 +548,7 @@ impl ClientBackend {
             .unwrap();
     }
 
-    async fn handle_update_access_req(
+    pub async fn handle_update_access_req(
         img_id: String,
         action: Action,
         client_socket: Arc<UdpSocket>,

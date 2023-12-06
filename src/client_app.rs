@@ -42,7 +42,7 @@ async fn init() -> ClientBackend {
 async fn main_menu() -> State {
     println!(
         "Welcome! Choose one of the following by typing the number.\
-    \n1. Encrypt\n2. Directory of Service\n3. Edit Access\n4. View Image\n5. Quit"
+    \n1. Encrypt\n2. Directory of Service\n3. Edit Access\n4. View Image\n5. View Requests\n6. Quit"
     );
     loop {
         let choice = read_input().await;
@@ -55,6 +55,8 @@ async fn main_menu() -> State {
         } else if choice == "4" {
             return State::ViewImage;
         } else if choice == "5" {
+            return State::ViewRequests;
+        } else if choice == "6" {
             return State::Quit;
         }
     }
@@ -248,6 +250,85 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
     }
 }
 
+async fn view_requests(backend: Arc<Mutex<ClientBackend>>) -> State {
+    println!("To go back to the main menu enter m.");
+    println!("In front of you is a list requests by other clients. Choose a request by selecting its index.");
+    
+    let mut v: Vec<(String, Action)> = Vec::new();
+    let requests = backend
+        .lock()
+        .await
+        .requests
+        .lock()
+        .await
+        .clone();
+
+    let reqs_num = requests.len() as u32;
+
+    let mut idx = 0;
+    for (key, action) in &requests {
+        idx += 1;
+        println!(
+            "{}. {:?}",
+            key,
+            action,
+        );
+        v.push((key.clone(), action.clone()));
+    }
+
+    loop {
+        print!("Enter a valid source client: ");
+        _ = std::io::stdout().flush();
+        let input = read_input().await;
+        if input == "m" {
+            return State::MainMenu;
+        } else {
+            let idx: u32 = match input.parse() {
+                Ok(num) => num,
+                Err(_) => continue,
+            };
+            if idx > reqs_num || idx < 1 {
+                continue;
+            } else {
+                print!("Do you approve (y/n)? ");
+                _ = std::io::stdout().flush();
+                let input = read_input().await;
+                if input == "m" {
+                    return State::MainMenu;
+                } else if input == "n" {
+                    let img_id = v[(idx - 1) as usize].0.clone();
+                    backend
+                    .lock()
+                    .await
+                    .requests
+                    .lock()
+                    .await.remove(&img_id.clone());
+                    return State::ViewRequests;
+                } else if input == "y" {
+                    let img_id = v[(idx - 1) as usize].0.clone();
+                    let parts : Vec<&str> = img_id.split('&').collect();
+                    let src_addr:SocketAddr= parts[1].parse().unwrap();
+                    ClientBackend::handle_update_access_req(
+                        v[(idx - 1) as usize].0.clone(),
+                        v[(idx - 1) as usize].1.clone(),
+                        backend.lock().await.client_socket.clone(),
+                        src_addr,
+                    )
+                    .await;
+                    backend
+                    .lock()
+                    .await
+                    .requests
+                    .lock()
+                    .await.remove(&img_id.clone());
+                    return State::ViewRequests;
+                }
+                        
+            }
+        }
+    }
+}
+
 async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("To go back to the main menu enter m.");
     println!("In front of you is a list images you have access to. Use image index to select the image you wish to see.");
@@ -373,6 +454,7 @@ enum State {
     ChooseImage(SocketAddr), // user id???
     ViewImage,
     EditAccess,
+    ViewRequests,
     Quit,
 }
 
@@ -399,6 +481,9 @@ async fn main() {
             }
             State::ViewImage => {
                 state = view_image(backend.clone()).await;
+            }
+            State::ViewRequests => {
+                state = view_requests(backend.clone()).await;
             }
             State::Quit => {
                 quit(backend.clone()).await;

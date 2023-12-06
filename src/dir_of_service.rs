@@ -164,7 +164,6 @@ impl ServerDirOfService {
 
     // send pending requests to the server that sent a query
     pub async fn client_query_pending_reply(&self, socket: Arc<UdpSocket>, src_addr: SocketAddr) {
-        println!("HERE");
         let client_socket = SocketAddr::new(src_addr.ip(), src_addr.port() + 1);
         let sender = socket.local_addr().unwrap();
         let msg = Msg {
