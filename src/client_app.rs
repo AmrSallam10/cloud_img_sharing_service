@@ -253,31 +253,21 @@ async fn edit_access(backend: Arc<Mutex<ClientBackend>>) -> State {
 async fn view_requests(backend: Arc<Mutex<ClientBackend>>) -> State {
     println!("To go back to the main menu enter m.");
     println!("In front of you is a list requests by other clients. Choose a request by selecting its index.");
-    
+
     let mut v: Vec<(String, Action)> = Vec::new();
-    let requests = backend
-        .lock()
-        .await
-        .requests
-        .lock()
-        .await
-        .clone();
+    let requests = backend.lock().await.requests.lock().await.clone();
 
     let reqs_num = requests.len() as u32;
 
-    let mut idx = 0;
-    for (key, action) in &requests {
-        idx += 1;
-        println!(
-            "{}. {:?}",
-            key,
-            action,
-        );
+    // let mut idx = 0;
+    for (idx, (key, action)) in requests.iter().enumerate() {
+        println!("{}. {} - {:?}", idx + 1, key, action,);
         v.push((key.clone(), action.clone()));
+        // idx += 1;
     }
 
     loop {
-        print!("Enter a valid source client: ");
+        print!("Enter a valid request number: ");
         _ = std::io::stdout().flush();
         let input = read_input().await;
         if input == "m" {
@@ -298,16 +288,17 @@ async fn view_requests(backend: Arc<Mutex<ClientBackend>>) -> State {
                 } else if input == "n" {
                     let img_id = v[(idx - 1) as usize].0.clone();
                     backend
-                    .lock()
-                    .await
-                    .requests
-                    .lock()
-                    .await.remove(&img_id.clone());
+                        .lock()
+                        .await
+                        .requests
+                        .lock()
+                        .await
+                        .remove(&img_id.clone());
                     return State::ViewRequests;
                 } else if input == "y" {
                     let img_id = v[(idx - 1) as usize].0.clone();
-                    let parts : Vec<&str> = img_id.split('&').collect();
-                    let src_addr:SocketAddr= parts[1].parse().unwrap();
+                    let parts: Vec<&str> = img_id.split('&').collect();
+                    let src_addr: SocketAddr = parts[1].parse().unwrap();
                     ClientBackend::handle_update_access_req(
                         v[(idx - 1) as usize].0.clone(),
                         v[(idx - 1) as usize].1.clone(),
@@ -316,14 +307,14 @@ async fn view_requests(backend: Arc<Mutex<ClientBackend>>) -> State {
                     )
                     .await;
                     backend
-                    .lock()
-                    .await
-                    .requests
-                    .lock()
-                    .await.remove(&img_id.clone());
+                        .lock()
+                        .await
+                        .requests
+                        .lock()
+                        .await
+                        .remove(&img_id.clone());
                     return State::ViewRequests;
                 }
-                        
             }
         }
     }

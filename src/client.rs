@@ -9,18 +9,6 @@
 extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
-use image::{open, ImageBuffer, Rgba};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::Arc;
-use std::{env, fs as std_fs};
-use tokio::io::AsyncBufReadExt;
-use tokio::{self, fs};
-use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
-use minifb::{Key, Window, WindowOptions};
-use log::{info, warn, log, error, trace};
 use crate::commons::{
     self, Action, ENCRYPTED_PICS_PATH, HIGH_RES_PICS_PATH, LOW_RES_PICS_PATH, PICS_ROOT_PATH,
     REQ_ID_LOG_FILEPATH,
@@ -34,6 +22,18 @@ use crate::utils::{
 use commons::{Msg, Type};
 use commons::{BUFFER_SIZE, ELECTION_PORT, SERVERS_FILEPATH, SERVICE_PORT, SERVICE_SENDBACK_PORT};
 use fragment::Image;
+use image::{open, ImageBuffer, Rgba};
+use log::{error, info, log, trace, warn};
+use minifb::{Key, Window, WindowOptions};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
+use std::{env, fs as std_fs};
+use tokio::io::AsyncBufReadExt;
+use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+use tokio::{self, fs};
 
 pub struct ClientBackend {
     cloud_socket: Arc<UdpSocket>,
@@ -85,7 +85,7 @@ impl ClientBackend {
             received_complete_imgs: HashMap::new(),
             own_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
             received_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
-            requests: Arc::new(Mutex::new(HashMap::new()))
+            requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -487,7 +487,9 @@ impl ClientBackend {
         // Set the title and size of the window
         let viewer_title = format!(
             "Image from: {:?}\t\t\t\t\tImage name: {}\t\t\t\t\tRemaining Views: {}",
-            src_addr, name_without_ext, access-1
+            src_addr,
+            name_without_ext,
+            access - 1
         );
 
         // Create a window to display the image
@@ -503,11 +505,8 @@ impl ClientBackend {
         )
         .expect("Failed to create window");
 
- 
-
         // Main event loop
         while window.is_open() && !window.is_key_down(Key::Escape) {
-                   
             // Update the window with the image data
             let buffer: Vec<u32> = decoded_buffer
                 .pixels()
@@ -517,7 +516,6 @@ impl ClientBackend {
             window
                 .update_with_buffer(&buffer, width_decoded as usize, height_decoded as usize)
                 .expect("Failed to update window");
-
         }
         true
     }
