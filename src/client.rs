@@ -506,6 +506,24 @@ impl ClientBackend {
 
         access_pixel[3] -= 1;
 
+        let img_id = format!(
+            "{}&{}&{}",
+            src_addr,
+            self.client_socket.local_addr().unwrap(),
+            img_name
+        );
+        println!("Before");
+        let mut guard = self.received_shared_imgs.lock().await;
+        println!("After");
+        let new_access = access_pixel[3];
+        let entry = guard.entry(src_addr).or_insert(Vec::new());
+        if let Some(index) = entry.iter().position(|(s, _)| s == &img_id) {
+            entry[index] = (img_id, new_access as u32);
+        } else {
+            entry.push((img_id, new_access as u32));
+        }
+        drop(guard);
+
         let secret_bytes = decode_img(img_buffer.clone()).await;
         let decoded_buffer = image::load_from_memory(&secret_bytes).unwrap();
         let decoded_buffer = decoded_buffer.to_rgba8();

@@ -148,7 +148,7 @@ async fn choose_image(backend: Arc<Mutex<ClientBackend>>, client_addr: SocketAdd
         .await;
 
     sleep(Duration::from_millis(500)).await;
-    // let guard =
+
     let low_res_imgs_tmp = backend.lock().await.low_res_imgs_tmp.lock().await.clone();
     backend.lock().await.low_res_imgs_tmp.lock().await.clear();
     let mut imgs_num = 0;
@@ -389,6 +389,7 @@ async fn view_image(backend: Arc<Mutex<ClientBackend>>) -> State {
             table.push((addr.to_string(), img_parts.last().unwrap().to_string()));
         }
     }
+    drop(guard);
 
     loop {
         print!("Enter a valid index: ");
