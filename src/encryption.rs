@@ -1,6 +1,39 @@
 use image::{open, DynamicImage, ImageBuffer, Rgba};
+use std::path::Path;
 
 use crate::fragment::Image;
+
+pub struct ImageLoader {
+    pub def1: Option<DynamicImage>,
+    pub def2: Option<DynamicImage>,
+    pub def3: Option<DynamicImage>,
+    pub def4: Option<DynamicImage>,
+    pub def5: Option<DynamicImage>,
+    pub def6: Option<DynamicImage>,
+}
+
+impl ImageLoader {
+    pub fn load_image(&mut self, path: &str) -> DynamicImage {
+        // Load the image if not already loaded
+        let entry = match path {
+            "default_images/def1.png" => &mut self.def1,
+            "default_images/def2.png" => &mut self.def2,
+            "default_images/def3.png" => &mut self.def3,
+            "default_images/def4.png" => &mut self.def4,
+            "default_images/def5.png" => &mut self.def5,
+            "default_images/def6.png" => &mut self.def6,
+            _ => panic!("Unsupported image path"),
+        };
+
+        if let Some(image) = entry {
+            image.clone()
+        } else {
+            let loaded_image = image::open(path).unwrap();
+            *entry = Some(loaded_image.clone());
+            loaded_image
+        }
+    }
+}
 
 pub async fn encode_img(
     secret_bytes: Vec<u8>,

@@ -32,6 +32,7 @@ use commons::{Msg, Type};
 mod fragment;
 use fragment::BigMessage;
 mod encryption;
+use encryption::ImageLoader;
 mod utils;
 
 #[derive(Clone)]
@@ -488,13 +489,22 @@ async fn main() {
     let mut received_complete_msgs: HashMap<String, BigMessage> = HashMap::new();
     let mut channels_map: HashMap<String, mpsc::Sender<u32>> = HashMap::new();
 
+    let mut img_loader = ImageLoader {
+        def1: None,
+        def2: None,
+        def3: None,
+        def4: None,
+        def5: None,
+        def6: None,
+    };
+
     //Different def images with different sizes to accomodate different size of secret images
-    let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
-    let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
-    let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
-    let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
-    let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
-    let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    // let def1: DynamicImage = image::open("default_images/def1.png").unwrap();
+    // let def2: DynamicImage = image::open("default_images/def2.png").unwrap();
+    // let def3: DynamicImage = image::open("default_images/def3.png").unwrap();
+    // let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
+    // let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
+    // let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
 
     if init_fail {
         send_fail_msg(election_socket.clone(), &stats).await;
@@ -546,15 +556,32 @@ async fn main() {
 
                                     println!("{}", data.len());
 
-                                    // let default_image = def1.clone();
+                                    // let default_image = match data.len() {
+                                    //     len if len > 9100000 => def6.clone(),
+                                    //     len if len > 3000000 => def5.clone(),
+                                    //     len if len > 2100000 => def4.clone(),
+                                    //     len if len > 670000 => def3.clone(),
+                                    //     len if len > 350000 => def2.clone(),
+                                    //     _ => def1.clone(),
+                                    // };
 
                                     let default_image = match data.len() {
-                                        len if len > 9100000 => def6.clone(),
-                                        len if len > 3000000 => def5.clone(),
-                                        len if len > 2100000 => def4.clone(),
-                                        len if len > 670000 => def3.clone(),
-                                        len if len > 350000 => def2.clone(),
-                                        _ => def1.clone(),
+                                        len if len > 9100000 => {
+                                            img_loader.load_image("default_images/def6.png")
+                                        }
+                                        len if len > 3000000 => {
+                                            img_loader.load_image("default_images/def5.png")
+                                        }
+                                        len if len > 2100000 => {
+                                            img_loader.load_image("default_images/def4.png")
+                                        }
+                                        len if len > 670000 => {
+                                            img_loader.load_image("default_images/def3.png")
+                                        }
+                                        len if len > 350000 => {
+                                            img_loader.load_image("default_images/def2.png")
+                                        }
+                                        _ => img_loader.load_image("default_images/def1.png"),
                                     };
 
                                     tokio::spawn(async move {

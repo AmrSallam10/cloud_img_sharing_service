@@ -29,10 +29,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{env, fs as std_fs};
 use tokio::io::AsyncBufReadExt;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio::{self, fs};
 
 pub struct ClientBackend {
@@ -43,9 +45,10 @@ pub struct ClientBackend {
     cloud_servers: Vec<(SocketAddr, SocketAddr)>,
     dir_of_serv: ClientDirOfService,
     received_complete_imgs: HashMap<String, BigMessage>,
-    pub own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
-    pub received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+    pub own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
+    pub received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
     pub requests: Arc<Mutex<HashMap<String, Action>>>,
+    pub low_res_imgs_tmp: Arc<Mutex<Vec<String>>>,
 }
 
 impl ClientBackend {
@@ -86,6 +89,7 @@ impl ClientBackend {
             own_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
             received_shared_imgs: Arc::new(Mutex::new(HashMap::new())),
             requests: Arc::new(Mutex::new(HashMap::new())),
+            low_res_imgs_tmp: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -95,6 +99,7 @@ impl ClientBackend {
         let own_shared_imgs = self.own_shared_imgs.clone();
         let received_shared_imgs = self.received_shared_imgs.clone();
         let requests = self.requests.clone();
+        let low_res_img_tmp = self.low_res_imgs_tmp.clone();
         ClientDirOfService::join(self.cloud_socket.clone(), self.cloud_servers.clone()).await;
         let pending_updates = self.query_pending_updates().await;
         if let Some(actions_map) = pending_updates {
@@ -112,7 +117,13 @@ impl ClientBackend {
                     + "&"
                     + partial_img_id_parts[1];
                 let src_addr = partial_img_id_parts[0].parse::<SocketAddr>().unwrap();
-                ClientBackend::handle_update_access(img_id, value.clone(), src_addr).await;
+                ClientBackend::handle_update_access(
+                    img_id,
+                    value.clone(),
+                    src_addr,
+                    received_shared_imgs.clone(),
+                )
+                .await;
             }
         }
         let mut received_complete_imgs: HashMap<String, BigMessage> = HashMap::new();
@@ -136,6 +147,7 @@ impl ClientBackend {
                                 own_shared_imgs.clone(),
                                 received_shared_imgs.clone(),
                                 requests.clone(),
+                                low_res_img_tmp.clone(),
                             )
                             .await;
                         }
@@ -153,9 +165,10 @@ impl ClientBackend {
         msg: Msg,
         src_addr: SocketAddr,
         received_complete_imgs: &mut HashMap<String, BigMessage>,
-        own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
-        received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+        own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
+        received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
         requests: Arc<Mutex<HashMap<String, Action>>>,
+        low_res_img_tmp: Arc<Mutex<Vec<String>>>,
     ) {
         match msg.msg_type {
             Type::LowResImgReq => {
@@ -168,6 +181,7 @@ impl ClientBackend {
                     frag,
                     src_addr,
                     received_complete_imgs,
+                    low_res_img_tmp,
                 )
                 .await;
             }
@@ -235,7 +249,8 @@ impl ClientBackend {
             }
 
             Type::UpdateAccess(img_id, action) => {
-                ClientBackend::handle_update_access(img_id, action, src_addr).await;
+                ClientBackend::handle_update_access(img_id, action, src_addr, received_shared_imgs)
+                    .await;
             }
             _ => {}
         }
@@ -284,6 +299,7 @@ impl ClientBackend {
         frag: fragment::Fragment,
         src_addr: SocketAddr,
         received_complete_imgs: &mut HashMap<String, BigMessage>,
+        low_res_img_tmp: Arc<Mutex<Vec<String>>>,
     ) {
         if let Some(pic_id) = fragment::receive_one(
             client_socket.clone(),
@@ -298,10 +314,12 @@ impl ClientBackend {
             let path = format!("{}/{}", LOW_RES_PICS_PATH, src_addr);
             let parts: Vec<&str> = pic_id.split('&').collect();
             let pic_name = *parts.last().unwrap();
+            println!("Received low res img ({}) from {}", pic_name, src_addr);
             mkdir(path.as_str());
             fs::write(format!("{}/{}", path, pic_name), data)
                 .await
                 .unwrap();
+            low_res_img_tmp.lock().await.push(pic_name.to_string());
         }
     }
 
@@ -327,20 +345,29 @@ impl ClientBackend {
             socket.send_to(&serialized_msg, target_addr).await.unwrap();
         }
 
-        // wait for election result (server ip)
-        for _ in 0..5 {
-            match socket.recv_from(&mut buffer).await {
-                Ok((_bytes_read, src_addr)) => {
-                    if let Ok(response) = std::str::from_utf8(&buffer[.._bytes_read]) {
-                        let chosen_server: SocketAddr = response.parse().unwrap();
-                        info!("{}", chosen_server);
-                        return Some(chosen_server);
-                    } else {
+        let sleep = sleep(Duration::from_millis(5000));
+        tokio::pin!(sleep);
+
+        for _ in 0..10 {
+            tokio::select! {
+                    _ = &mut sleep => {
                         continue;
+                    },
+                    recv_result = socket.recv_from(&mut buffer) => {
+                        match recv_result {
+                            Ok((_bytes_read, src_addr)) => {
+                                if let Ok(response) = std::str::from_utf8(&buffer[.._bytes_read]) {
+                                    let chosen_server: SocketAddr = response.parse().unwrap();
+                                    info!("{}", chosen_server);
+                                    return Some(chosen_server);
+                                } else {
+                                    continue;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Error getting the result of eletion: {}", e);
+                            }
                     }
-                }
-                Err(e) => {
-                    error!("Error getting the result of eletion: {}", e);
                 }
             }
         }
@@ -372,53 +399,60 @@ impl ClientBackend {
         requested_access: u32,
         client_socket: Arc<UdpSocket>,
         src_addr: SocketAddr,
-        own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+        own_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
     ) {
         println!("Handle Image Request");
         let img_parts: Vec<&str> = img_name.split('.').collect();
         let path = format!("{}/{}.png", ENCRYPTED_PICS_PATH, img_parts.first().unwrap());
+        if file_exists(path.as_str()) {
+            let img_buffer = file_as_image_buffer(path);
 
-        let img_buffer = file_as_image_buffer(path);
+            //Embedding the access limit in the image
+            let mut img_buffer_with_access = img_buffer.clone();
+            let (width, height) = img_buffer_with_access.dimensions();
+            let access_pixel = img_buffer_with_access.get_pixel_mut(width - 1, height - 1);
+            access_pixel[3] = requested_access as u8; //set the alpha channel of the last pixel to the access limit
 
-        //Embedding the access limit in the image
-        let mut img_buffer_with_access = img_buffer.clone();
-        let (width, height) = img_buffer_with_access.dimensions();
-        let access_pixel = img_buffer_with_access.get_pixel_mut(width - 1, height - 1);
-        access_pixel[3] = requested_access as u8; //set the alpha channel of the last pixel to the access limit
+            let image = Image {
+                dims: img_buffer_with_access.dimensions(),
+                data: img_buffer_with_access.into_raw(),
+            };
 
-        let image = Image {
-            dims: img_buffer_with_access.dimensions(),
-            data: img_buffer_with_access.into_raw(),
-        };
+            let msg = Msg {
+                sender: client_socket.local_addr().unwrap(),
+                receiver: src_addr,
+                msg_type: Type::SharedImage(img_name.clone(), image, requested_access),
+                payload: None,
+            };
 
-        let msg = Msg {
-            sender: client_socket.local_addr().unwrap(),
-            receiver: src_addr,
-            msg_type: Type::SharedImage(img_name.clone(), image, requested_access),
-            payload: None,
-        };
+            let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
+            let pic_id = format!(
+                "{}&{}&{}.png",
+                client_socket.local_addr().unwrap(),
+                src_addr,
+                img_parts.first().unwrap()
+            );
 
-        let serialized_msg = serde_cbor::ser::to_vec(&msg).unwrap();
-        let pic_id = format!(
-            "{}&{}&{}.png",
-            client_socket.local_addr().unwrap(),
-            src_addr,
-            img_parts.first().unwrap()
-        );
+            fragment::client_send(
+                serialized_msg,
+                client_socket.clone(),
+                src_addr.to_string().as_str(),
+                pic_id.as_str(),
+                false,
+            )
+            .await;
+            println!("Finished sending pic");
 
-        fragment::client_send(
-            serialized_msg,
-            client_socket.clone(),
-            src_addr.to_string().as_str(),
-            pic_id.as_str(),
-            false,
-        )
-        .await;
-        println!("Finished sending pic");
-
-        let mut guard = own_shared_imgs.lock().await;
-        let entry = guard.entry(src_addr).or_insert(Vec::new());
-        entry.push(pic_id);
+            let mut guard = own_shared_imgs.lock().await;
+            let entry = guard.entry(src_addr).or_insert(Vec::new());
+            if let Some(index) = entry.iter().position(|(s, _)| s == &pic_id) {
+                entry[index] = (pic_id, requested_access);
+            } else {
+                entry.push((pic_id, requested_access));
+            }
+        } else {
+            println!("File does not exist: {}", path);
+        }
     }
 
     async fn handle_shared_image(
@@ -427,7 +461,7 @@ impl ClientBackend {
         recieved_access: u32,
         client_socket: Arc<UdpSocket>,
         src_addr: SocketAddr,
-        received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<String>>>>,
+        received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
     ) {
         println!("Handle Share Image");
         println!("Image ID: {}", pic_id);
@@ -448,17 +482,13 @@ impl ClientBackend {
             format!("{}/{}", path_encrypted, pic_name),
         );
 
-        // save_image_buffer(
-        //     image_buffer.clone(),
-        //     format!("{}/{}.png", path_encrypted, pic_without_ext),
-        // );
-
-        // let secret_bytes = decode_img(image_buffer).await;
-        // let _ = tokio::fs::write(format!("{}/{}", path_decoded, pic_name), secret_bytes).await;
-
         let mut guard = received_shared_imgs.lock().await;
         let entry = guard.entry(src_addr).or_insert(Vec::new());
-        entry.push(pic_id);
+        if let Some(index) = entry.iter().position(|(s, _)| s == &pic_id) {
+            entry[index] = (pic_id, recieved_access);
+        } else {
+            entry.push((pic_id, recieved_access));
+        }
     }
 
     pub async fn view_image(&self, img_name: String, src_addr: SocketAddr) -> bool {
@@ -573,7 +603,12 @@ impl ClientBackend {
             .unwrap();
     }
 
-    async fn handle_update_access(img_id: String, action: Action, src_addr: SocketAddr) {
+    async fn handle_update_access(
+        img_id: String,
+        action: Action,
+        src_addr: SocketAddr,
+        received_shared_imgs: Arc<Mutex<HashMap<SocketAddr, Vec<(String, u32)>>>>,
+    ) {
         println!("Handle Update Access");
         println!("Image ID: {}", img_id);
         println!("Image New Access: {:?}", action);
@@ -599,8 +634,17 @@ impl ClientBackend {
                 }
                 Action::Revoke => access_pixel[3] = 0,
             }
+            let updated_access_num = access_pixel[3];
 
             save_image_buffer(img_buffer, path.clone());
+
+            let mut guard = received_shared_imgs.lock().await;
+            let entry = guard.entry(src_addr).or_insert(Vec::new());
+            if let Some(index) = entry.iter().position(|(s, _)| s == &img_id) {
+                entry[index] = (img_id, updated_access_num as u32);
+            } else {
+                entry.push((img_id, updated_access_num as u32));
+            }
         }
     }
 
@@ -692,25 +736,36 @@ impl ClientBackend {
             .await
         {
             ClientDirOfService::query_pending(self.cloud_socket.clone(), chosen_server).await;
-
             let mut buffer = [0; 2048];
+
+            println!("Waiting for pending updates status from cloud");
+            let sleep = sleep(Duration::from_millis(500));
+            tokio::pin!(sleep);
+
             for _ in 0..5 {
-                // println!("Received bytes from cloud");
-                match self.cloud_socket.recv_from(&mut buffer).await {
-                    Ok((bytes_read, src_addr)) => {
-                        match serde_cbor::de::from_slice(&buffer[..bytes_read]) {
-                            Ok(Msg {
-                                msg_type: Type::ClientDirOfServQueryPendingReply(r),
-                                ..
-                            }) => return r,
-                            Ok(_) => continue,
-                            Err(e) => continue,
+                tokio::select! {
+                    _ = &mut sleep => {
+                        continue;
+                    },
+                    recv_result = self.cloud_socket.recv_from(&mut buffer) => {
+                        match recv_result{
+                            Ok((bytes_read, src_addr)) => {
+                                match serde_cbor::de::from_slice(&buffer[..bytes_read]) {
+                                    Ok(Msg {
+                                        msg_type: Type::ClientDirOfServQueryPendingReply(r),
+                                        ..
+                                    }) => return r,
+                                    Ok(_) => continue,
+                                    Err(e) => continue,
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error getting the result of election: {}", e);
+                                continue;
+                            }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Error getting the result of election: {}", e);
-                        continue;
-                    }
+
                 }
             }
         }
@@ -765,7 +820,10 @@ impl ClientBackend {
                 .await
             {
                 let chosen_server = chosen_server.to_string();
-                println!("Sending img to sever {}", chosen_server);
+                println!(
+                    "Sending image ({}) to server {} for ENCRYPTION",
+                    pic_with_ext, chosen_server
+                );
 
                 // send the img to be encrypted
                 let contents = fs::read(pic_path).await.unwrap();
