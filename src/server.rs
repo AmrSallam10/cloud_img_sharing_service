@@ -13,6 +13,8 @@ use image::DynamicImage;
 use rand::Rng;
 use std::cmp::min;
 use std::net::SocketAddr;
+use std::time::Instant;
+
 use std::ops::Index;
 use std::sync::Arc;
 use std::{env, fs as std_fs};
@@ -80,22 +82,28 @@ async fn handle_election(
     election_socket: Arc<UdpSocket>,
     stats: Arc<Mutex<ServerStats>>,
 ) {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(),
-    );
-    sys.refresh_cpu();
-    let priority = 16.0 - sys.load_average().one as f32;
+    // let mut sys = System::new_with_specifics(
+    //     RefreshKind::new()
+    //         .with_cpu(CpuRefreshKind::everything())
+    //         .with_memory(),
+    // );
+    // sys.refresh_cpu();
+    // let priority = 16.0 - sys.load_average().one as f32;
+    let random = {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(10..30)
+    } as u64;
+    let other_server_port = src_addr.port();
+    let own_port = election_socket.local_addr().unwrap().port();
     let mut data = stats.lock().await;
     let own_priority = data
         .running_elections
         .entry(req_id.clone())
-        .or_insert(priority)
+        .or_insert(random as f32)
         .to_owned();
     println!("[{}] Own priority {}", req_id, own_priority);
 
-    if own_priority > p {
+    if own_priority > p || (own_priority == p && own_port > other_server_port) {
         println!("[{}] Own priority is higher", req_id);
         drop(data);
         send_ok_msg(
@@ -106,12 +114,12 @@ async fn handle_election(
         )
         .await;
 
-        if !stats
-            .lock()
-            .await
-            .elections_initiated_by_me
-            .contains(&req_id)
-        {
+        let mut data = stats.lock().await;
+        if !data.elections_initiated_by_me.contains(&req_id) {
+            println!("checked for {} in elec_init_by_me", req_id);
+            data.elections_initiated_by_me.insert(req_id.clone());
+            println!("Added {} into elec_init_by_me", req_id);
+            drop(data);
             send_election_msg(
                 service_socket.clone(),
                 election_socket.clone(),
@@ -195,26 +203,34 @@ async fn send_election_msg(
     init_f: bool,
 ) {
     let mut data = stats.lock().await;
-    if !init_f || !data.running_elections.contains_key(&req_id) {
+    if !init_f
+        || (!data.running_elections.contains_key(&req_id)
+            && !data.elections_initiated_by_me.contains(&req_id))
+    {
         let sender = election_socket.local_addr().unwrap();
         println!("[{}] Sending Election msgs! - {}", req_id, init_f);
 
         let peer_servers = data.get_peer_servers();
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new()
-                .with_cpu(CpuRefreshKind::everything())
-                .with_memory(),
-        );
-        sys.refresh_cpu();
-        let priority = 16.0 - sys.load_average().one as f32;
+        // let mut sys = System::new_with_specifics(
+        //     RefreshKind::new()
+        //         .with_cpu(CpuRefreshKind::everything())
+        //         .with_memory(),
+        // );
+        // sys.refresh_cpu();
+        // let priority = 16.0 - sys.load_average().one as f32;
+        let random = {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(10..30)
+        } as u64;
         let own_priority = data
             .running_elections
             .entry(req_id.clone())
-            .or_insert(priority)
+            .or_insert(random as f32)
             .to_owned();
 
         if !data.elections_initiated_by_me.contains(&req_id) {
             data.elections_initiated_by_me.insert(req_id.clone());
+            println!("Added {} into elec_init_by_me", req_id);
         }
         drop(data);
         println!("[{}] My own Priority {} - {}", req_id, own_priority, init_f);
@@ -552,11 +568,14 @@ async fn handle_encryption(
     rx: mpsc::Receiver<u32>,
     default_image: DynamicImage,
 ) {
+    let start = Instant::now();
     let encoded_bytes = encode(data, req_id.clone(), default_image).await;
+    let duration = start.elapsed().as_secs_f32();
     println!(
-        "[{}] finished encryption, image size is {}",
+        "[{}] finished encryption, image size is {}, Encryption time: {}",
         req_id,
-        encoded_bytes.len()
+        encoded_bytes.len(),
+        duration
     );
     fragment::server_send(
         encoded_bytes,
@@ -654,6 +673,7 @@ async fn main() {
     let def4: DynamicImage = image::open("default_images/def4.png").unwrap();
     let def5: DynamicImage = image::open("default_images/def5.png").unwrap();
     let def6: DynamicImage = image::open("default_images/def6.png").unwrap();
+    println!("Loaded default images");
 
     if init_fail {
         send_fail_msg(election_socket.clone(), &stats).await;
@@ -664,7 +684,7 @@ async fn main() {
             loop {
                 match service_socket.recv_from(&mut service_buffer).await {
                     Ok((bytes_read, src_addr)) => {
-                        println!("{} bytes from {}.", bytes_read, src_addr);
+                        // println!("{} bytes from {}.", bytes_read, src_addr);
 
                         let msg: Msg = serde_cbor::de::from_slice(&service_buffer[..bytes_read])
                             .expect("Failed to deserialize msg from service socket");
@@ -717,12 +737,19 @@ async fn main() {
                             }
                             Type::Ack(msg_id, block_id) => {
                                 println!("ACK: {}", msg_id);
-                                channels_map
-                                    .get(&msg_id)
-                                    .unwrap()
-                                    .send(block_id)
-                                    .await
-                                    .unwrap()
+                                match channels_map.get(&msg_id) {
+                                    Some(tx) => match tx.send(block_id).await {
+                                        Ok(o) => {}
+                                        Err(e) => {
+                                            println!("TX Dropped!");
+                                            std::process::exit(1);
+                                        }
+                                    },
+                                    None => {
+                                        println!("TX not in the map!");
+                                        std::process::exit(1);
+                                    }
+                                }
                             }
                             _ => {}
                         }

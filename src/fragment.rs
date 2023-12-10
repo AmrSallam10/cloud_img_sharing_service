@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
@@ -155,6 +156,7 @@ pub async fn server_send(
     msg_id: &str,
     mut rx: mpsc::Receiver<u32>,
 ) {
+    let start = Instant::now();
     let frag_num = (data.len() + FRAG_SIZE - 1) / FRAG_SIZE; // a shorthand for ceil()
     let block_num = (frag_num + BLOCK_SIZE - 1) / BLOCK_SIZE; // a shorthand for ceil()
     let msg_len = data.len();
@@ -223,6 +225,11 @@ pub async fn server_send(
             }
         }
     }
+    println!(
+        "[{}] Finished sending encrypted image, duration {}",
+        msg_id,
+        start.elapsed().as_secs_f32()
+    );
 }
 
 pub async fn recieve(socket: Arc<UdpSocket>) -> Vec<u8> {
