@@ -94,7 +94,9 @@ async fn handle_election(
         .to_owned();
     println!("[{}] Own priority {}", req_id, own_priority);
 
-    if own_priority > p {
+    let own_addr = election_socket.local_addr().unwrap().to_string();
+    let other_addr = src_addr.to_string();
+    if own_priority > p || (own_priority == p && own_addr > other_addr) {
         println!("[{}] Own priority is higher", req_id);
         drop(data);
         send_ok_msg(
@@ -105,12 +107,10 @@ async fn handle_election(
         )
         .await;
 
-        if !stats
-            .lock()
-            .await
-            .elections_initiated_by_me
-            .contains(&req_id)
-        {
+        let mut data = stats.lock().await;
+        if !data.elections_initiated_by_me.contains(&req_id) {
+            data.elections_initiated_by_me.insert(req_id.clone());
+            drop(data);
             send_election_msg(
                 service_socket.clone(),
                 election_socket.clone(),
