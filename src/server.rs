@@ -741,7 +741,7 @@ async fn main() {
                                     Some(tx) => match tx.send(block_id).await {
                                         Ok(o) => {}
                                         Err(e) => {
-                                            println!("TX Dropped!");
+                                            println!("[{}] TX Dropped!", msg_id);
                                             std::process::exit(1);
                                         }
                                     },
