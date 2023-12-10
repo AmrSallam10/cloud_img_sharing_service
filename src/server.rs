@@ -129,6 +129,9 @@ async fn handle_election(
             )
             .await;
         }
+    }else {
+        drop(data);
+        handle_coordinator(stats, req_id).await;
     }
 }
 
@@ -249,7 +252,7 @@ async fn send_election_msg(
                 .unwrap();
         }
         println!("[{}] Waiting for ok msg - {}", req_id, init_f);
-        let sleep = sleep(Duration::from_millis(500));
+        let sleep = sleep(Duration::from_millis(700));
         tokio::pin!(sleep);
         // sleep(Duration::from_millis(1000)).await;
 
